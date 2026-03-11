@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>商城实验组 GPM 衰减深度分析</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root {
+  --bg: #0c0e14; --card: #161923; --card2: #1c2030;
+  --border: #2a2f42; --text: #e0e4f0; --muted: #7a829e;
+  --accent: #ff3366; --A: #10b981; --B: #3b82f6; --C: #eab308; --D: #ef4444;
+  --exp: #818cf8; --ctrl: #64748b; --up: #34d399; --dn: #f87171;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: 'Noto Sans SC', sans-serif; line-height: 1.6; }
+.mono { font-family: 'JetBrains Mono', monospace; }
+
+/* Header */
+.header { background: linear-gradient(135deg, #141728 0%, #0c0e14 100%); padding: 32px 24px 24px; border-bottom: 1px solid var(--border); }
+.header-inner { max-width: 1140px; margin: 0 auto; }
+.badge { display: inline-block; background: var(--accent); color: #fff; font-size: 11px; font-weight: 700; padding: 2px 10px; border-radius: 4px; margin-right: 8px; }
+.header-meta { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.header h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 6px; }
+.header-kpi { font-size: 13px; color: var(--muted); }
+.header-kpi .up { color: var(--up); font-weight: 700; }
+.header-kpi .dn { color: var(--dn); font-weight: 700; }
+
+/* Nav */
+.nav { background: var(--card); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100; }
+.nav-inner { max-width: 1140px; margin: 0 auto; display: flex; overflow-x: auto; }
+.nav button { padding: 13px 20px; font-size: 13px; font-weight: 500; cursor: pointer; color: var(--muted); background: none; border: none; border-bottom: 2px solid transparent; white-space: nowrap; font-family: inherit; transition: all .15s; }
+.nav button.active { color: var(--text); font-weight: 700; border-bottom-color: var(--accent); }
+.nav button:hover { color: var(--text); }
+
+/* Layout */
+.main { max-width: 1140px; margin: 0 auto; padding: 0 20px 60px; }
+.section { display: none; }
+.section.active { display: block; }
+.section-title { margin: 32px 0 16px; }
+.section-title h2 { font-size: 20px; font-weight: 700; letter-spacing: -0.3px; }
+.section-title p { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+/* Grid */
+.grid { display: grid; gap: 10px; }
+.grid-8 { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.grid-2 { grid-template-columns: 1fr 1fr; }
+.grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+@media (max-width: 768px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+
+/* Cards */
+.card { background: var(--card); border-radius: 10px; padding: 16px; border: 1px solid var(--border); }
+.card-sm { padding: 12px 14px; }
+
+/* Metric Card */
+.metric { min-width: 0; }
+.metric .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+.metric .pct { font-size: 20px; font-weight: 700; }
+.metric .pct.sm { font-size: 16px; }
+.metric .detail { font-size: 11px; color: var(--muted); margin-top: 1px; }
+.metric .pp { font-size: 13px; font-weight: 700; }
+.up-c { color: var(--up); }
+.dn-c { color: var(--dn); }
+
+/* Insight */
+.insight { border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; font-size: 13px; line-height: 1.6; }
+.insight-danger { background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.25); }
+.insight-warn { background: rgba(234,179,8,.08); border: 1px solid rgba(234,179,8,.25); }
+.insight-success { background: rgba(16,185,129,.08); border: 1px solid rgba(16,185,129,.25); }
+.insight-info { background: rgba(129,140,248,.08); border: 1px solid rgba(129,140,248,.25); }
+.insight .icon { font-weight: 700; margin-right: 6px; }
+.insight-danger .icon { color: var(--D); }
+.insight-warn .icon { color: var(--C); }
+.insight-success .icon { color: var(--A); }
+
+/* Quadrant card */
+.q-card { border-left: 4px solid var(--border); margin-bottom: 14px; }
+.q-card .q-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.q-badge { width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 14px; flex-shrink: 0; }
+.q-label { font-weight: 600; font-size: 15px; }
+.q-meta { margin-left: auto; font-size: 12px; color: var(--muted); }
+
+/* Sub-tabs */
+.subtabs { display: flex; gap: 0; margin-bottom: 16px; overflow-x: auto; background: var(--card); border-radius: 8px; border: 1px solid var(--border); }
+.subtabs button { padding: 10px 14px; font-size: 12px; font-weight: 500; cursor: pointer; color: var(--muted); background: none; border: none; white-space: nowrap; border-radius: 6px; font-family: inherit; transition: all .12s; }
+.subtabs button.active { color: var(--text); font-weight: 700; background: rgba(42,47,66,.6); }
+
+/* Tables */
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th { padding: 8px 10px; text-align: left; color: var(--muted); font-weight: 600; font-size: 11px; white-space: nowrap; border-bottom: 1px solid var(--border); }
+td { padding: 8px 10px; border-bottom: 1px solid rgba(42,47,66,.3); }
+td.bold { font-weight: 600; }
+td.danger { color: var(--dn); }
+tr.highlight { background: rgba(239,68,68,.04); }
+tr.highlight-a { background: rgba(16,185,129,.04); }
+.id-cell { font-family: 'JetBrains Mono', monospace; font-size: 10px; }
+
+/* Chart container */
+.chart-wrap { position: relative; height: 260px; }
+.chart-wrap-sm { height: 200px; }
+
+/* Action cards */
+.action-card { border-top: 3px solid var(--border); }
+.action-card h3 { font-size: 15px; font-weight: 700; margin-bottom: 12px; }
+.action-card p { font-size: 13px; line-height: 1.7; margin-bottom: 8px; }
+.priority-box { background: rgba(255,51,102,.08); border: 1px solid rgba(255,51,102,.2); border-radius: 10px; padding: 16px; margin-top: 16px; }
+.priority-box h3 { font-size: 15px; font-weight: 700; color: var(--accent); margin-bottom: 10px; }
+.priority-box p { font-size: 13px; line-height: 1.8; margin-bottom: 4px; }
+
+/* A-class feature box */
+.a-profile { background: rgba(16,185,129,.08); border: 1px solid rgba(16,185,129,.25); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.a-profile h3 { font-size: 15px; font-weight: 700; color: var(--A); margin-bottom: 10px; }
+.a-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap: 12px; font-size: 13px; }
+
+/* D-class dispose box */
+.d-dispose { background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.25); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.d-dispose h3 { font-size: 15px; font-weight: 700; color: var(--D); margin-bottom: 8px; }
+.d-dispose p { font-size: 13px; line-height: 1.7; margin-bottom: 6px; }
+
+/* Stagger animation */
+@keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+.fade-up { animation: fadeUp .4s ease-out both; }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="header-inner">
+    <div class="header-meta"><span class="badge">实验分析</span>Exp: 75600877 vs Ctrl: 75600876</div>
+    <h1>商城实验组 GPM 衰减与 C/D 类商品负向贡献深度分析</h1>
+    <div class="header-kpi">PV <span class="up">+29.5%</span> ｜ GMV <span class="dn">-1.4%</span> ｜ GPM <span class="dn">-24.0%</span> (35.5→27.0)</div>
+  </div>
+</div>
+
+<!-- NAV -->
+<div class="nav">
+  <div class="nav-inner" id="mainNav">
+    <button class="active" data-tab="overview">全局概览</button>
+    <button data-tab="quadrant">四象限分析</button>
+    <button data-tab="drill">D类深度下钻</button>
+    <button data-tab="gpm">GPM拆解</button>
+    <button data-tab="action">行动方案</button>
+  </div>
+</div>
+
+<div class="main">
+
+<!-- ===================== OVERVIEW ===================== -->
+<div class="section active" id="sec-overview">
+  <div class="section-title"><h2>一、全局指标看板</h2><p>实验组 vs 对照组核心指标（百分比变化优先展示）</p></div>
+  <div class="grid grid-8" id="overviewMetrics"></div>
+  <div style="height:12px"></div>
+  <div class="insight insight-danger"><span class="icon">⚠</span>PV +29.5% 但 GMV -1.4%，GPM -24.0%。漏斗断裂在 CO（-11.2%）叠加 AOV -6.3%。增量流量几乎全部无效。</div>
+
+  <div class="grid grid-2" style="margin-top:20px">
+    <div class="card"><h3 style="font-size:14px;font-weight:600;color:var(--muted);margin-bottom:12px">商品象限分布（1,139 SKU）</h3><div class="chart-wrap"><canvas id="chartPie"></canvas></div></div>
+    <div class="card"><h3 style="font-size:14px;font-weight:600;color:var(--muted);margin-bottom:12px">各象限 ΔGMV 贡献</h3><div class="chart-wrap"><canvas id="chartWaterfall"></canvas></div></div>
+  </div>
+  <div style="height:12px"></div>
+  <div class="insight insight-warn"><span class="icon">⚡</span>D 类 751 SKU（65.9%）：PV +35.5% 但 GMV -58.5%，贡献 -$14,090。C/D 合计 -$15,386，略超 A 类 +$14,281。</div>
+</div>
+
+<!-- ===================== QUADRANT ===================== -->
+<div class="section" id="sec-quadrant">
+  <div class="section-title"><h2>二、四象限分类与指标下钻</h2><p>按 PV 和 GMV 变化方向划分</p></div>
+  <div id="quadrantCards"></div>
+
+  <div class="grid grid-2" style="margin-top:16px">
+    <div class="card"><h3 style="font-size:14px;font-weight:600;color:var(--muted);margin-bottom:10px">GPM 对比</h3><div class="chart-wrap chart-wrap-sm"><canvas id="chartGPM"></canvas></div></div>
+    <div class="card"><h3 style="font-size:14px;font-weight:600;color:var(--muted);margin-bottom:10px">CO 转化率对比 (%)</h3><div class="chart-wrap chart-wrap-sm"><canvas id="chartCO"></canvas></div></div>
+  </div>
+  <div style="height:12px"></div>
+  <div class="insight insight-danger"><span class="icon">⚠</span>核心是"根本没人买"。D 类 CO -58.0%，C 类 CO -55.6%。AOV 变化温和（D -15.5%，C +12.3%），证实转化量级不足，非客单价问题。</div>
+</div>
+
+<!-- ===================== DRILL ===================== -->
+<div class="section" id="sec-drill">
+  <div class="section-title"><h2>三、D 类核心审计</h2><p>751 个 SKU 多维度穿透（按负向 GMV 贡献排序）</p></div>
+  <div class="subtabs" id="drillTabs">
+    <button class="active" data-sub="cat1">一级类目</button>
+    <button data-sub="cat2">二级类目</button>
+    <button data-sub="cat3">三级类目</button>
+    <button data-sub="price">价格段</button>
+    <button data-sub="user">用户类型</button>
+    <button data-sub="tier">商家层级</button>
+    <button data-sub="combo">维度组合</button>
+  </div>
+  <div id="drillContent"></div>
+</div>
+
+<!-- ===================== GPM ===================== -->
+<div class="section" id="sec-gpm">
+  <div class="section-title"><h2>四、GPM 变动拆解</h2><p>结构性（Mix）vs 效率性（Rate）</p></div>
+  <div class="grid grid-3" style="margin-bottom:16px">
+    <div class="card" style="text-align:center"><div style="font-size:11px;color:var(--muted);margin-bottom:6px">GPM 总变化</div><div style="font-size:28px;font-weight:700;color:var(--dn)">-23.9%</div><div style="font-size:12px;color:var(--muted)">Δ-8.50 (35.53→27.04)</div></div>
+    <div class="card" style="text-align:center"><div style="font-size:11px;color:var(--muted);margin-bottom:6px">结构效应 (Mix)</div><div style="font-size:28px;font-weight:700;color:var(--up)">+0.66</div><div style="font-size:12px;color:var(--muted)">占比: <span class="up-c">-7.8%</span></div></div>
+    <div class="card" style="text-align:center"><div style="font-size:11px;color:var(--muted);margin-bottom:6px">效率效应 (Rate)</div><div style="font-size:28px;font-weight:700;color:var(--dn)">-9.15</div><div style="font-size:12px;color:var(--muted)">占比: <span class="dn-c">107.6%</span></div></div>
+  </div>
+  <div class="insight insight-danger"><span class="icon">⚠</span>Rate Effect 贡献 107.6% 的 GPM 衰减（同类目转化率全面崩塌）。Mix Effect 微正。不是分发问题，是算法效率的系统性问题。</div>
+  <div class="card" style="margin-top:16px"><div class="chart-wrap"><canvas id="chartDecomp"></canvas></div></div>
+  <div class="card" style="margin-top:16px" id="gpmTable"></div>
+  <div style="height:12px"></div>
+  <div class="insight insight-warn"><span class="icon">⚡</span>全部 7 个主要类目 Rate Effect 均为负。Appliances GPM -71%，Food -59%。</div>
+</div>
+
+<!-- ===================== ACTION ===================== -->
+<div class="section" id="sec-action">
+  <div class="section-title"><h2>五、行动方案</h2><p>基于数据分析的行动方案</p></div>
+  <div class="subtabs" id="actionTabs">
+    <button class="active" data-sub="summary">核心结论</button>
+    <button data-sub="a_expand">A类特征 → 扩品池</button>
+    <button data-sub="d_blacklist">D类黑名单</button>
+    <button data-sub="strategy">C/D治理策略</button>
+  </div>
+  <div id="actionContent"></div>
+</div>
+
+</div><!-- .main -->
+
+<script>
+// ===== DATA =====
+const OV = {
+  exp: { pv:1410974,click:38409,order:1899,gmv:38148.73,totalSub:4054.02,ctr:2.72,co:4.94,gpm:27.04,opm:1.3459,aov:20.09 },
+  ctrl: { pv:1089222,click:32501,order:1806,gmv:38702.86,totalSub:3624.64,ctr:2.98,co:5.56,gpm:35.53,opm:1.6581,aov:21.43 },
+};
+const QS = [
+  {q:"A",label:"双增 (标杆)",n:306,pv_e:582512,pv_c:455288,gmv_e:25434.7,gmv_c:11153.4,gmv_diff:14281.3,ctr_e:2.82,ctr_c:2.88,co_e:7.71,co_c:4.60,gpm_e:43.66,gpm_c:24.50,aov_e:20.06,aov_c:18.50,sub_e:2636.3,sub_c:1304.5},
+  {q:"B",label:"提效 (存量优化)",n:15,pv_e:40330,pv_c:41600,gmv_e:1727.5,gmv_c:1176.9,gmv_diff:550.6,ctr_e:2.67,ctr_c:2.84,co_e:7.61,co_c:5.25,gpm_e:42.83,gpm_c:28.29,aov_e:21.07,aov_c:18.98,sub_e:108.7,sub_c:108.0},
+  {q:"C",label:"双跌 (存量萎缩)",n:67,pv_e:30346,pv_c:33024,gmv_e:988.9,gmv_c:2284.8,gmv_diff:-1295.9,ctr_e:3.43,ctr_c:3.63,co_e:4.03,co_c:9.08,gpm_e:32.59,gpm_c:69.19,aov_e:23.54,aov_c:20.96,sub_e:65.8,sub_c:140.8},
+  {q:"D",label:"高曝低转 (流量浪费)",n:751,pv_e:757786,pv_c:559310,gmv_e:9997.7,gmv_c:24087.7,gmv_diff:-14090.0,ctr_e:2.62,ctr_c:3.04,co_e:2.55,co_c:6.07,gpm_e:13.19,gpm_c:43.07,aov_e:19.72,aov_c:23.34,sub_e:1243.3,sub_c:2071.3},
+];
+const QCOLORS = {A:'#10b981',B:'#3b82f6',C:'#eab308',D:'#ef4444'};
+const dCat1=[{cat:"Beauty & Personal Care",n:263,gd:-4831.5,pv:20,ge:13.8,gc:40.3,ce:2.4,cc:5.4},{cat:"Home Supplies",n:111,gd:-3013.2,pv:53,ge:14.3,gc:62.5,ce:2.3,cc:7.0},{cat:"Health",n:18,gd:-1087.7,pv:43,ge:26.7,gc:83.1,ce:7.1,cc:12.9},{cat:"Household Appliances",n:17,gd:-1082.5,pv:53,ge:21.3,gc:125.6,ce:1.9,cc:5.6},{cat:"Phones & Electronics",n:59,gd:-858.6,pv:51,ge:10.9,gc:38.6,ce:3.3,cc:8.3},{cat:"Home Improvement",n:47,gd:-823.6,pv:35,ge:10.8,gc:32.6,ce:2.1,cc:5.7},{cat:"Textiles",n:39,gd:-671.1,pv:29,ge:9.9,gc:29.1,ce:2.7,cc:5.2},{cat:"Food & Beverages",n:37,gd:-392.4,pv:68,ge:16.0,gc:52.5,ce:2.0,cc:5.7}];
+const dCat2=[{cat:"Home Decor",p:"Home Supplies",n:32,gd:-1829.7,pv:26,ge:21.3,gc:85.9},{cat:"Skincare",p:"Beauty",n:54,gd:-1139.4,pv:16,ge:11.2,gc:38.3},{cat:"Nutrition & Wellness",p:"Health",n:18,gd:-1087.7,pv:43,ge:26.7,gc:83.1},{cat:"Home Appliances",p:"Appliances",n:17,gd:-1082.5,pv:53,ge:21.3,gc:125.6},{cat:"Makeup",p:"Beauty",n:59,gd:-1062.1,pv:13,ge:11.6,gc:31.0},{cat:"Bath & Body Care",p:"Beauty",n:41,gd:-1020.5,pv:21,ge:21.1,gc:58.1},{cat:"Lights & Lighting",p:"Home Improv.",n:40,gd:-737.8,pv:34,ge:11.0,gc:31.7},{cat:"Haircare & Styling",p:"Beauty",n:38,gd:-696.5,pv:25,ge:16.5,gc:43.7},{cat:"Home Care Supplies",p:"Home Supplies",n:42,gd:-626.4,pv:71,ge:15.8,gc:53.7},{cat:"Personal Care Appliances",p:"Beauty",n:40,gd:-618.0,pv:29,ge:14.7,gc:43.5}];
+const dCat3=[{cat:"Decorative Stickers",n:7,gd:-1229.0,pv:14,ge:49.0,gc:219.2,ce:1.6,cc:6.2},{cat:"Vacuums & Floor Care",n:12,gd:-1069.3,pv:42,ge:24.0,gc:129.7,ce:2.0,cc:5.7},{cat:"Vitamins & Supplements",n:8,gd:-595.2,pv:41,ge:34.6,gc:83.8,ce:9.3,cc:13.8},{cat:"Serums & Essences",n:9,gd:-504.8,pv:10,ge:17.9,gc:48.9,ce:3.1,cc:5.7},{cat:"Decorative Flowers",n:10,gd:-449.4,pv:17,ge:25.3,gc:66.2,ce:3.3,cc:7.4},{cat:"Fitness Supplements",n:5,gd:-370.4,pv:39,ge:11.1,gc:78.9,ce:3.2,cc:10.2},{cat:"Indoor Lighting",n:7,gd:-343.2,pv:11,ge:19.3,gc:45.6,ce:2.4,cc:5.2},{cat:"Skin Care Kits",n:13,gd:-331.9,pv:10,ge:11.1,gc:39.0,ce:1.0,cc:2.2},{cat:"Eyeshadow",n:11,gd:-323.1,pv:21,ge:6.7,gc:29.8,ce:3.0,cc:5.9},{cat:"Pillows & Bed Wedges",n:8,gd:-314.4,pv:13,ge:12.5,gc:25.8,ce:5.7,cc:8.7},{cat:"Storage Holders & Racks",n:5,gd:-299.8,pv:60,ge:0,gc:89.3,ce:0,cc:4.5},{cat:"Body Moisturizers",n:4,gd:-294.0,pv:17,ge:30.6,gc:92.0,ce:5.5,cc:10.3},{cat:"Hair Trimmers & Clippers",n:14,gd:-279.6,pv:18,ge:19.6,gc:42.6,ce:3.6,cc:6.5},{cat:"Body Care Sets",n:7,gd:-277.9,pv:20,ge:0,gc:58.0,ce:0,cc:2.9},{cat:"Toilet Paper & Wipes",n:9,gd:-277.8,pv:39,ge:24.8,gc:57.9,ce:7.8,cc:13.1}];
+const dPrice=[{r:">$20",n:256,gd:-6492.1,ctE:3.01,ctC:3.55,coE:1.7,coC:4.8,gE:20.3,gC:81.1},{r:"$5-10",n:198,gd:-3269.4,ctE:2.31,ctC:2.82,coE:2.7,coC:7.3,gE:9.5,gC:33.4},{r:"$10-15",n:95,gd:-1691.7,ctE:2.69,ctC:2.98,coE:2.8,coC:5.5,gE:14.8,gC:36.1},{r:"$15-20",n:92,gd:-1544.9,ctE:2.55,ctC:2.94,coE:2.2,coC:5.0,gE:16.4,gC:42.5},{r:"$3-5",n:68,gd:-844.2,ctE:2.82,ctC:3.02,coE:2.6,coC:6.4,gE:8.2,gC:23.9},{r:"$1-3",n:41,gd:-246.6,ctE:2.34,ctC:2.69,coE:5.5,coC:9.0,gE:5.2,gC:13.9}];
+const dUser=[{t:"商城老",pe:621043,pc:437665,ge:14.9,gc:51.0,ce:2.7,cc:6.7,ae:20.3,ac:23.6},{t:"电商新",pe:98016,pc:94078,ge:4.4,gc:11.0,ce:1.3,cc:2.5,ae:14.5,ac:18.9},{t:"电商老商城新",pe:38727,pc:27567,ge:7.8,gc:26.3,ce:2.4,cc:4.5,ae:14.4,ac:22.7}];
+const dTier=[{t:"T5 (头部)",n:143,gd:-4415.9,pv:23,ge:16.1,gc:47.5},{t:"T4",n:126,gd:-4341.7,pv:23,ge:17.4,gc:47.6},{t:"T2",n:220,gd:-2826.6,pv:54,ge:9.6,gc:38.2},{t:"T3",n:138,gd:-2085.9,pv:41,ge:11.2,gc:38.8},{t:"T1 (尾部)",n:124,gd:-419.9,pv:97,ge:1.9,gc:22.0}];
+const dCombo=[{c:"Home Supplies × >$20",gd:-1849.7,ge:37.2,gc:144.8,pv:27},{c:"Beauty × >$20",gd:-1755.1,ge:14.2,gc:56.2,pv:26},{c:"Beauty × $5-10",gd:-1258.0,ge:13.2,gc:36.3,pv:16},{c:"Appliances × >$20",gd:-1069.3,ge:22.9,gc:126.9,pv:45},{c:"Beauty × $10-15",gd:-776.4,ge:18.9,gc:38.8,pv:15},{c:"Health × >$20",gd:-758.0,ge:28.2,gc:111.4,pv:43},{c:"Beauty × $15-20",gd:-698.6,ge:12.7,gc:41.3,pv:20},{c:"Home Supplies × $5-10",gd:-496.5,ge:5.8,gc:28.0,pv:64},{c:"Electronics × >$20",gd:-366.1,ge:19.4,gc:65.5,pv:51},{c:"Home Supplies × $15-20",gd:-326.8,ge:20.4,gc:52.5,pv:36}];
+const gpmCats=[{cat:"Home Supplies",sc:11.5,se:13.3,gc:53.3,ge:32.1,mix:0.96,rate:-2.83},{cat:"Beauty",sc:42.0,se:37.1,gc:32.3,ge:27.4,mix:-1.56,rate:-1.84},{cat:"Health",sc:6.7,se:7.0,gc:61.5,ge:43.3,mix:0.17,rate:-1.28},{cat:"Appliances",sc:1.2,se:1.4,gc:116.1,ge:33.6,mix:0.29,rate:-1.16},{cat:"Food",sc:1.6,se:2.2,gc:47.7,ge:19.6,mix:0.26,rate:-0.62},{cat:"Home Improv.",sc:6.6,se:6.7,gc:31.7,ge:23.4,mix:0.02,rate:-0.56},{cat:"Electronics",sc:6.9,se:7.7,gc:30.6,ge:23.8,mix:0.24,rate:-0.52}];
+const aCat1=[{cat:"Beauty & Personal Care",n:92,gd:4672,pv:15,gpm:38.8},{cat:"Home Supplies",n:45,gd:2641,pv:51,gpm:59.2},{cat:"Textiles",n:24,gd:1880,pv:27,gpm:52.2},{cat:"Phones & Electronics",n:33,gd:1202,pv:40,gpm:40.2},{cat:"Home Improvement",n:18,gd:866,pv:29,gpm:54.4},{cat:"Health",n:15,gd:857,pv:31,gpm:52.2},{cat:"Toys & Hobbies",n:27,gd:764,pv:31,gpm:40.1}];
+const aCat3=[{cat:"Tissues & Napkins",gd:791,pv:108,gpm:214},{cat:"Curtain Accessories",gd:710,pv:23,gpm:89},{cat:"Carpets & Rugs",gd:688,pv:20,gpm:53.7},{cat:"Makeup Sets",gd:658,pv:7,gpm:48.3},{cat:"Vitamins & Supplements",gd:558,pv:37,gpm:42.1},{cat:"Men's Fragrance",gd:475,pv:31,gpm:89},{cat:"Indoor Lighting",gd:468,pv:11,gpm:78.9},{cat:"Decorative Stickers",gd:365,pv:10,gpm:89.2},{cat:"Curlers & Straighteners",gd:358,pv:35,gpm:94.3},{cat:"Women's Fragrance",gd:348,pv:31,gpm:48.9}];
+const aCombo=[{c:"Beauty × >$20",gd:2487,gpm:64.8},{c:"Home Supplies × >$20",gd:1016,gpm:225},{c:"Textiles × $5-10",gd:902,gpm:45.1},{c:"Beauty × $15-20",gd:756,gpm:43.4},{c:"Home Supplies × $5-10",gd:723,gpm:40.6},{c:"Beauty × $5-10",gd:609,gpm:21.5},{c:"Electronics × >$20",gd:593,gpm:106.6},{c:"Home Supplies × $10-15",gd:561,gpm:60.8}];
+const dProds=[{id:"1729401462291074505",gd:-952.2,pv:9,ge:62.3,gc:298.9,c3:"Decorative Stickers",pr:">$20",t:"T5",s:"Local"},{id:"1729619387769461528",gd:-470.2,pv:44,ge:0,gc:223.1,c3:"Vacuums & Floor Care",pr:">$20",t:"T4",s:"Local"},{id:"1729507022043715930",gd:-332.5,pv:54,ge:0,gc:519.6,c3:"Vacuums & Floor Care",pr:">$20",t:"T4",s:"CB"},{id:"1729456907267575281",gd:-283.3,pv:1,ge:54.6,gc:112.3,c3:"Decorative Flowers",pr:">$20",t:"T3",s:"Local"},{id:"1729625533358709631",gd:-225.7,pv:20,ge:0,gc:142.7,c3:"Storage Holders",pr:">$20",t:"T4",s:"Local"},{id:"1729622205176584928",gd:-210.4,pv:4,ge:0,gc:140.5,c3:"Skin Care Kits",pr:">$20",t:"T5",s:"Local"},{id:"1729425636881173955",gd:-210.0,pv:80,ge:66.2,gc:532,c3:"Fitness Supplements",pr:">$20",t:"T5",s:"Local"},{id:"1729428778869165792",gd:-207.4,pv:4,ge:3.9,gc:67.1,c3:"Lip Treatments",pr:"$5-10",t:"T5",s:"Local"},{id:"1729675601130920672",gd:-189.4,pv:3,ge:21,gc:29.9,c3:"Lipstick & Lip Gloss",pr:"$10-15",t:"T5",s:"Local"},{id:"1729491130358209046",gd:-166.5,pv:2,ge:27.7,gc:91.2,c3:"Serums & Essences",pr:"$5-10",t:"T5",s:"Local"},{id:"1729421340078083687",gd:-163.8,pv:29,ge:16.7,gc:55,c3:"Vitamins",pr:">$20",t:"T5",s:"Local"},{id:"1729403861064781334",gd:-158.6,pv:4,ge:10.9,gc:42.9,c3:"Serums & Essences",pr:"$5-10",t:"T5",s:"Local"},{id:"1729546738291542752",gd:-153.6,pv:12,ge:0,gc:128.2,c3:"Eyeshadow",pr:">$20",t:"T5",s:"Local"},{id:"1729478817538939413",gd:-149.6,pv:52,ge:0,gc:1336,c3:"Hair Trimmers",pr:">$20",t:"T2",s:"Local"},{id:"1729696380681427468",gd:-148.4,pv:32,ge:10.1,gc:53.6,c3:"Decorative Flowers",pr:"$5-10",t:"T2",s:"Local"},{id:"1729426393330912823",gd:-148.3,pv:29,ge:0,gc:598.1,c3:"Body Care Sets",pr:">$20",t:"T2",s:"Local"},{id:"1729409333842710023",gd:-144.2,pv:21,ge:0,gc:141.3,c3:"Carpets & Rugs",pr:"$10-15",t:"T2",s:"CB"},{id:"1729548265608944633",gd:-144.1,pv:9,ge:22.1,gc:37.7,c3:"Indoor Lighting",pr:">$20",t:"T4",s:"CB"},{id:"1729425936360967666",gd:-134.1,pv:49,ge:20.9,gc:112.6,c3:"Vitamins",pr:"$10-15",t:"T3",s:"Local"},{id:"1729601581902961350",gd:-133.6,pv:306,ge:0,gc:549.7,c3:"Mattresses & Bedding",pr:">$20",t:"T2",s:"Local"},{id:"1729429495189114704",gd:-133.6,pv:14,ge:0,gc:245.6,c3:"Vacuums & Floor Care",pr:">$20",t:"T4",s:"Local"},{id:"1729687901406075623",gd:-129.5,pv:17,ge:0,gc:52.3,c3:"Body Care Sets",pr:"$15-20",t:"T1",s:"Local"},{id:"1729601514991228981",gd:-126.9,pv:55,ge:0,gc:207.4,c3:"Envelopes & Postal",pr:"$10-15",t:"T2",s:"Local"},{id:"1729400065706790077",gd:-125.0,pv:29,ge:19.5,gc:76.8,c3:"Toilet Paper & Wipes",pr:"$15-20",t:"T4",s:"Local"},{id:"1729400918320123689",gd:-124.2,pv:8,ge:21.1,gc:123.5,c3:"Indoor Lighting",pr:"$5-10",t:"T2",s:"CB"},{id:"1729404744610581976",gd:-123.1,pv:4,ge:21.7,gc:109.8,c3:"Body Moisturizers",pr:">$20",t:"T4",s:"Local"},{id:"1729464374726528605",gd:-118.5,pv:5,ge:5.4,gc:39.2,c3:"Makeup Sets",pr:"$3-5",t:"T5",s:"Local"},{id:"1729570503674206710",gd:-115.9,pv:25,ge:32.1,gc:178.2,c3:"Men's Fragrance",pr:">$20",t:"T4",s:"Local"},{id:"1729412978999791010",gd:-113.3,pv:68,ge:33.8,gc:288.5,c3:"Decorative Stickers",pr:"$3-5",t:"T3",s:"CB"},{id:"1729430555192626564",gd:-106.3,pv:68,ge:203.3,gc:658.1,c3:"Vitamins",pr:">$20",t:"T5",s:"Local"}];
+
+// ===== HELPERS =====
+const fN=v=>typeof v==='number'?v.toLocaleString('en-US',{maximumFractionDigits:1}):v;
+const pct=(e,c)=>c===0?'—':((e/c-1)*100).toFixed(1);
+const gpmP=(e,c)=>c>0?((e/c-1)*100).toFixed(0)+'%':'-100%';
+const updn=(v,inv)=>(inv?v<0:v>0)?'up-c':'dn-c';
+
+function metricCard(label,exp,ctrl,opts={}){
+  const {unit='',inv=false,isPct=false,sm=false}=opts;
+  const p=pct(exp,ctrl); const d=exp-ctrl;
+  let html=`<div class="card ${sm?'card-sm':''} metric"><div class="label">${label}</div>`;
+  if(isPct){
+    html+=`<div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap"><span class="pct ${sm?'sm':''}">${fN(exp)}${unit==='%'?'%':''}</span><span class="pp ${updn(d,inv)}">${d>0?'+':''}${d.toFixed(1)}${unit==='%'?'pp':''}</span></div>`;
+    html+=`<div class="detail">对照: ${fN(ctrl)}${unit==='%'?'%':''}</div>`;
+  } else {
+    html+=`<div class="pct ${sm?'sm':''} ${updn(parseFloat(p),inv)}">${parseFloat(p)>0?'+':''}${p}%</div>`;
+    html+=`<div class="detail">${unit}${fN(exp)} <span style="opacity:.5">vs</span> ${unit}${fN(ctrl)}</div>`;
+    html+=`<div class="detail">Δ ${unit}${d>0?'+':''}${fN(d)}</div>`;
+  }
+  return html+'</div>';
+}
+
+function makeTable(headers,rows){
+  let h='<table><thead><tr>'+headers.map(h=>`<th>${h}</th>`).join('')+'</tr></thead><tbody>';
+  h+=rows.join('')+'</tbody></table>';
+  return h;
+}
+
+// ===== INIT OVERVIEW =====
+(function(){
+  const e=OV.exp,c=OV.ctrl;
+  document.getElementById('overviewMetrics').innerHTML=
+    metricCard('PV (曝光)',e.pv,c.pv)+metricCard('GMV ($)',e.gmv,c.gmv,{unit:'$'})+
+    metricCard('Orders',e.order,c.order)+metricCard('GPM',e.gpm,c.gpm)+
+    metricCard('CTR',e.ctr,c.ctr,{isPct:true,unit:'%'})+metricCard('CO',e.co,c.co,{isPct:true,unit:'%'})+
+    metricCard('AOV ($)',e.aov,c.aov,{unit:'$'})+metricCard('总补贴 ($)',e.totalSub,c.totalSub,{unit:'$',inv:true});
+})();
+
+// ===== INIT QUADRANT =====
+(function(){
+  let h='';
+  QS.forEach(q=>{
+    const pvP=pct(q.pv_e,q.pv_c), gmvP=pct(q.gmv_e,q.gmv_c);
+    h+=`<div class="card q-card fade-up" style="border-left-color:${QCOLORS[q.q]}">
+      <div class="q-head">
+        <div class="q-badge" style="background:${QCOLORS[q.q]}">${q.q}</div>
+        <span class="q-label">${q.label}</span>
+        <span class="q-meta">${q.n} SKUs ｜ PV <span class="${updn(parseFloat(pvP))}">${parseFloat(pvP)>0?'+':''}${pvP}%</span> ｜ GMV <span class="${q.gmv_diff>=0?'up-c':'dn-c'}">${parseFloat(gmvP)>0?'+':''}${gmvP}%</span> <span style="opacity:.5">(Δ$${fN(q.gmv_diff)})</span></span>
+      </div>
+      <div class="grid grid-8">
+        ${metricCard('PV',q.pv_e,q.pv_c,{sm:true})}${metricCard('GPM',q.gpm_e,q.gpm_c,{sm:true})}
+        ${metricCard('CTR',q.ctr_e,q.ctr_c,{isPct:true,unit:'%',sm:true})}${metricCard('CO',q.co_e,q.co_c,{isPct:true,unit:'%',sm:true})}
+        ${metricCard('AOV',q.aov_e,q.aov_c,{unit:'$',sm:true})}${metricCard('补贴',q.sub_e,q.sub_c,{unit:'$',inv:true,sm:true})}
+      </div></div>`;
+  });
+  document.getElementById('quadrantCards').innerHTML=h;
+})();
+
+// ===== CHARTS (defer) =====
+Chart.defaults.color='#7a829e'; Chart.defaults.borderColor='#2a2f42'; Chart.defaults.font.family="'Noto Sans SC',sans-serif"; Chart.defaults.font.size=11;
+
+function initCharts(){
+  // Pie
+  new Chart(document.getElementById('chartPie'),{type:'doughnut',data:{labels:QS.map(q=>q.q+'类 ('+q.n+')'),datasets:[{data:QS.map(q=>q.n),backgroundColor:QS.map(q=>QCOLORS[q.q]),borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{padding:12,usePointStyle:true,pointStyleWidth:10}}}}});
+  // Waterfall
+  new Chart(document.getElementById('chartWaterfall'),{type:'bar',data:{labels:['A类贡献','B类贡献','C类拖累','D类拖累'],datasets:[{data:[14281.3,550.6,-1295.9,-14090],backgroundColor:['#10b981','#3b82f6','#eab308','#ef4444'],borderRadius:4}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>'$'+c.raw.toLocaleString()}}},scales:{x:{grid:{display:false}}}}});
+  // GPM
+  new Chart(document.getElementById('chartGPM'),{type:'bar',data:{labels:QS.map(q=>q.q+'类'),datasets:[{label:'实验组',data:QS.map(q=>q.gpm_e),backgroundColor:'#818cf8',borderRadius:4},{label:'对照组',data:QS.map(q=>q.gpm_c),backgroundColor:'#64748b',borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom'}}}});
+  // CO
+  new Chart(document.getElementById('chartCO'),{type:'bar',data:{labels:QS.map(q=>q.q+'类'),datasets:[{label:'实验组',data:QS.map(q=>q.co_e),backgroundColor:'#818cf8',borderRadius:4},{label:'对照组',data:QS.map(q=>q.co_c),backgroundColor:'#64748b',borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom'}}}});
+  // Decomp
+  new Chart(document.getElementById('chartDecomp'),{type:'bar',data:{labels:gpmCats.map(c=>c.cat),datasets:[{label:'Mix Effect',data:gpmCats.map(c=>c.mix),backgroundColor:'#3b82f6',borderRadius:4},{label:'Rate Effect',data:gpmCats.map(c=>c.rate),backgroundColor:'#ef4444',borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom'}}}});
+}
+setTimeout(initCharts,100);
+
+// GPM table
+(function(){
+  const rows=gpmCats.map(c=>{
+    const dp=(c.se-c.sc).toFixed(1);
+    return `<tr><td class="bold">${c.cat}</td><td>${c.sc}%→${c.se}% <span class="${parseFloat(dp)>0?'up-c':'dn-c'}">(${parseFloat(dp)>0?'+':''}${dp}pp)</span></td><td>${c.gc}→<span class="dn-c">${c.ge}</span></td><td class="danger">${gpmP(c.ge,c.gc)}</td><td><span class="${c.mix>=0?'up-c':'dn-c'}">${c.mix>0?'+':''}${c.mix.toFixed(2)}</span></td><td><span class="dn-c">${c.rate.toFixed(2)}</span></td></tr>`;
+  });
+  document.getElementById('gpmTable').innerHTML=makeTable(['类目','PV份额变化','GPM变化','GPM跌幅','Mix','Rate'],rows);
+})();
+
+// ===== DRILL TAB CONTENT =====
+function renderDrill(sub){
+  const el=document.getElementById('drillContent');
+  let html='';
+  if(sub==='cat1'){
+    const rows=dCat1.map(r=>`<tr><td class="bold">${r.cat}</td><td>${r.n}</td><td class="danger">$${fN(r.gd)}</td><td><span class="up-c">+${r.pv}%</span></td><td class="danger">${r.ge} ← ${r.gc} (${gpmP(r.ge,r.gc)})</td><td class="danger">${r.ce}% ← ${r.cc}% (${((r.ce/r.cc-1)*100).toFixed(0)}%)</td></tr>`);
+    html=`<div class="card">${makeTable(['一级类目','SKU','ΔGMV','PV涨幅','GPM变化','CO变化'],rows)}</div><div style="height:12px"></div><div class="insight insight-danger"><span class="icon">⚠</span>Beauty -$4,832 + Home Supplies -$3,013 = D 类负向 56%。Appliances GPM -83%（125.6→21.3）效率衰减最严重。</div>`;
+  } else if(sub==='cat2'){
+    const rows=dCat2.map((r,i)=>`<tr class="${i<3?'highlight':''}"><td class="bold">${i+1}</td><td class="bold">${r.cat}</td><td style="color:var(--muted)">${r.p}</td><td>${r.n}</td><td class="danger">$${fN(r.gd)}</td><td><span class="up-c">+${r.pv}%</span></td><td>${r.ge} <span style="color:var(--muted)">← ${r.gc}</span></td><td class="danger">${gpmP(r.ge,r.gc)}</td></tr>`);
+    html=`<div class="card">${makeTable(['#','二级类目','父类目','SKU','ΔGMV','PV涨幅','GPM 实验→对照','GPM跌幅'],rows)}</div><div style="height:12px"></div><div class="insight insight-danger"><span class="icon">⚠</span>Home Decor -$1,830（D 类 13%），GPM -75%。Skincare -$1,139 + Makeup -$1,062 占 Beauty 负向 46%。</div>`;
+  } else if(sub==='cat3'){
+    const rows=dCat3.map((r,i)=>`<tr class="${i<3?'highlight':''}"><td class="bold">${i+1}</td><td class="bold">${r.cat}</td><td>${r.n}</td><td class="danger">$${fN(r.gd)}</td><td><span class="up-c">+${r.pv}%</span></td><td><span class="dn-c">${r.ge}</span> / ${r.gc}</td><td class="danger">${r.gc>0?gpmP(r.ge,r.gc):'-100%'}</td><td><span class="dn-c">${r.ce}%</span> / ${r.cc}%</td></tr>`);
+    html=`<div class="card">${makeTable(['#','三级类目','SKU','ΔGMV','PV涨幅','GPM 实验/对照','GPM跌幅','CO 实验/对照'],rows)}</div><div style="height:12px"></div><div class="insight insight-danger"><span class="icon">⚠</span>Decorative Stickers -$1,229（GPM -78%，仅 7 SKU），Vacuums -$1,069（GPM -81%）。Storage Holders、Body Care Sets 实验组零成交。</div>`;
+  } else if(sub==='price'){
+    const rows=dPrice.map(r=>`<tr><td class="bold">${r.r}</td><td>${r.n}</td><td class="danger">$${fN(r.gd)}</td><td>${r.ctE}% / ${r.ctC}%</td><td><span class="dn-c">${r.coE}%</span> / ${r.coC}%</td><td class="danger">${((r.coE/r.coC-1)*100).toFixed(0)}%</td><td class="danger">${gpmP(r.gE,r.gC)}</td></tr>`);
+    html=`<div class="card">${makeTable(['价格段','SKU','ΔGMV','CTR 实验/对照','CO 实验/对照','CO跌幅','GPM跌幅'],rows)}</div><div style="height:12px"></div><div class="insight insight-warn"><span class="icon">⚡</span>&gt;$20 重灾区：-$6,492（D 类 46%），GPM -75%，CO -65%。全价格段 CO 系统性下跌 50-65%。</div>`;
+  } else if(sub==='user'){
+    const rows=dUser.map(r=>`<tr><td class="bold">${r.t}</td><td><span class="up-c">+${((r.pe/r.pc-1)*100).toFixed(0)}%</span></td><td><span class="dn-c">${r.ge}</span> / ${r.gc}</td><td class="danger">${((r.ge/r.gc-1)*100).toFixed(0)}%</td><td><span class="dn-c">${r.ce}%</span> / ${r.cc}%</td><td class="danger">${((r.ce/r.cc-1)*100).toFixed(0)}%</td><td class="danger">${((r.ae/r.ac-1)*100).toFixed(0)}%</td></tr>`);
+    html=`<div class="card">${makeTable(['用户类型','PV涨幅','GPM 实验/对照','GPM跌幅','CO 实验/对照','CO跌幅','AOV变化'],rows)}</div><div style="height:12px"></div><div class="insight insight-danger"><span class="icon">⚠</span>商城老用户 PV +42%，GPM -71%。电商老商城新 GPM -70%，AOV -37%（$22.7→$14.4），新流量与商品严重错配。</div>`;
+  } else if(sub==='tier'){
+    const rows=dTier.map(r=>`<tr><td class="bold">${r.t}</td><td>${r.n}</td><td class="danger">$${fN(r.gd)}</td><td><span class="up-c">+${r.pv}%</span></td><td><span class="dn-c">${r.ge}</span> / ${r.gc}</td><td class="danger">${gpmP(r.ge,r.gc)}</td></tr>`);
+    html=`<div class="card">${makeTable(['商家层级','SKU','ΔGMV','PV涨幅','GPM 实验/对照','GPM跌幅'],rows)}</div><div style="height:12px"></div><div class="insight insight-warn"><span class="icon">⚡</span>T5+T4 合计 -$8,758（D 类 62%），GPM -66%。T1 PV +97% 但 GPM -91%（仅 1.9）。全层级均受影响。</div>`;
+  } else if(sub==='combo'){
+    const rows=dCombo.map((r,i)=>`<tr class="${i<3?'highlight':''}"><td class="bold">${i+1}</td><td class="bold">${r.c}</td><td class="danger">$${fN(r.gd)}</td><td><span class="up-c">+${r.pv}%</span></td><td><span class="dn-c">${r.ge}</span> / ${r.gc}</td><td class="danger">${gpmP(r.ge,r.gc)}</td></tr>`);
+    html=`<div class="card"><h3 style="font-size:14px;font-weight:600;color:var(--muted);margin-bottom:10px">Top10 负向维度组合（一级类目 × 价格段）</h3>${makeTable(['#','维度组合','ΔGMV','PV涨幅','GPM 实验/对照','GPM跌幅'],rows)}</div><div style="height:12px"></div><div class="insight insight-danger"><span class="icon">⚠</span>Top3 合计 -$4,863，占 D 类 34.5%。高价段跨类目全面沦陷。</div>`;
+  }
+  el.innerHTML=html;
+}
+renderDrill('cat1');
+
+// ===== ACTION TAB CONTENT =====
+function renderAction(sub){
+  const el=document.getElementById('actionContent');
+  let html='';
+  if(sub==='summary'){
+    html=`<div class="card" style="padding:20px"><h3 style="font-size:16px;font-weight:700;color:var(--accent);margin-bottom:14px">核心结论</h3><div style="font-size:13px;line-height:1.8">
+      <p style="margin-bottom:10px"><strong>1. 问题定性：</strong><span class="dn-c" style="font-weight:700">算法转化效率崩塌</span>，Rate Effect 贡献 107.6% 的 GPM 衰减。</p>
+      <p style="margin-bottom:10px"><strong>2. D 类主因：</strong>751 SKU（66%），PV +35.5% 但 CO -58.0%，GMV -58.5%。</p>
+      <p style="margin-bottom:10px"><strong>3. 匹配问题：</strong>所有价格段 CO 下跌 50-65%，用户"不想买"而非"嫌贵"。</p>
+      <p style="margin-bottom:10px"><strong>4. 老用户受伤：</strong>商城老用户 D 类流量占 82%，GPM -70.8%。</p>
+      <p><strong>5. 零转化严重：</strong>D 类 586/751 (78%) 实验组 GPM=0，其中 453 个双组均零成交。</p></div></div>`;
+  } else if(sub==='a_expand'){
+    const r1=aCat1.map(r=>`<tr><td class="bold">${r.cat}</td><td>${r.n}</td><td><span class="up-c">+$${fN(r.gd)}</span></td><td><span class="up-c">+${r.pv}%</span></td><td>${r.gpm}</td></tr>`).join('');
+    const r3=aCat3.map((r,i)=>`<tr class="${i<3?'highlight-a':''}"><td class="bold">${i+1}</td><td class="bold">${r.cat}</td><td><span class="up-c">+$${fN(r.gd)}</span></td><td><span class="up-c">+${r.pv}%</span></td><td>${r.gpm}</td></tr>`).join('');
+    const rc=aCombo.map((r,i)=>`<tr><td class="bold">${i+1}</td><td class="bold">${r.c}</td><td><span class="up-c">+$${fN(r.gd)}</span></td><td>${r.gpm}</td></tr>`).join('');
+    html=`<div class="a-profile"><h3>A 类画像（306 SKU, +$14,281 / +128.0%）</h3><div class="a-grid">
+      <div><strong style="color:var(--A)">核心类目:</strong> Beauty 30%, Home Supplies 15%, Textiles 8%, Electronics 11%</div>
+      <div><strong style="color:var(--A)">价格段:</strong> &gt;$20 (37%) + $5-10 (26%) 双峰</div>
+      <div><strong style="color:var(--A)">商家层级:</strong> T5 (38%) + T2 (26%)</div>
+      <div><strong style="color:var(--A)">商家类型:</strong> Local 69%</div></div></div>
+      <h4 style="font-size:14px;font-weight:600;margin-bottom:10px">一级类目正向贡献</h4>
+      <div class="card" style="margin-bottom:16px">${makeTable(['一级类目','SKU','+ΔGMV','PV涨幅','GPM'],[r1])}</div>
+      <h4 style="font-size:14px;font-weight:600;margin-bottom:10px">三级类目 Top10（扩品方向）</h4>
+      <div class="card" style="margin-bottom:16px">${makeTable(['#','三级类目','+ΔGMV','PV涨幅','GPM'],[r3])}</div>
+      <h4 style="font-size:14px;font-weight:600;margin-bottom:10px">维度组合 Top8（类目×价格段）</h4>
+      <div class="card" style="margin-bottom:16px">${makeTable(['#','组合','+ΔGMV','GPM'],[rc])}</div>
+      <div class="insight insight-success"><span class="icon">✓</span>扩品优先：Tissues & Napkins (GPM 214)、Curtain Accessories (GPM 89)、Fragrance (GPM 49-89)、Curlers & Straighteners (GPM 94)。价格锚定 &gt;$20 / $5-10 双峰，优选 Local + T5/T2。</div>`;
+  } else if(sub==='d_blacklist'){
+    const rows=dProds.map((r,i)=>`<tr class="${i<5?'highlight':''}"><td class="bold">${i+1}</td><td class="id-cell">${r.id}</td><td class="danger">$${fN(r.gd)}</td><td><span class="up-c">+${r.pv}%</span></td><td><span class="${r.ge===0?'dn-c':''}">${r.ge}</span> / ${r.gc}</td><td>${r.c3}</td><td>${r.pr}</td><td>${r.t} ${r.s}</td></tr>`).join('');
+    html=`<div class="d-dispose"><h3>D 类处置建议（751 SKU）</h3>
+      <p><span class="dn-c" style="font-weight:700">立即剔除 (133 SKU)：</span>对照有成交、实验零转化 — 分发逻辑完全失效</p>
+      <p><span style="color:var(--C);font-weight:700">强烈建议剔除 (453 SKU)：</span>双组零成交 — 不适合商城曝光，浪费 181K PV</p>
+      <p><span style="color:var(--muted);font-weight:700">限流观察 (165 SKU)：</span>有成交但 GMV 负增长 — 设 PV cap 后观察</p></div>
+      <h4 style="font-size:14px;font-weight:600;margin-bottom:10px">Top30 负向 Product ID 名单</h4>
+      <div class="card" style="overflow-x:auto">${makeTable(['#','Product ID','ΔGMV','PV涨幅','GPM 实验/对照','三级类目','价格段','层级'],[rows])}</div>
+      <div class="card" style="margin-top:16px;padding:16px"><h4 style="font-size:14px;font-weight:600;color:var(--C);margin-bottom:10px">黑名单共性特征 → 未来选品规避</h4><div style="font-size:13px;line-height:1.8">
+      <p style="margin-bottom:6px"><strong>1. 高价非刚需：</strong>Top30 中 73% 为 &gt;$20，集中在 Stickers、Vacuums、Body Care Sets 等低频品</p>
+      <p style="margin-bottom:6px"><strong>2. 零成交率极高：</strong>Top30 中 57% 实验组 GPM=0，pCVR 预估完全失准</p>
+      <p style="margin-bottom:6px"><strong>3. Local T5/T4 为主：</strong>67% Local，60% T4/T5 — "看似优质"但实验组表现最差</p>
+      <p><strong>4. 品类红线：</strong>Decorative Stickers、Vacuums、Body Care Sets、Storage Racks 四个三级类目应设为选品审核重点</p></div></div>`;
+  } else if(sub==='strategy'){
+    html=`<div class="grid grid-2" style="margin-bottom:16px">
+      <div class="card action-card" style="border-top-color:var(--C)"><h3 style="color:var(--C)">C 类治理（67 SKU, -$1,296）</h3>
+        <p><strong style="color:var(--C)">诊断：</strong>补贴 -53.3% + 流量被 D 类"劫持"，CO -55.6%</p>
+        <p><strong>1.</strong> 对照 GPM &gt;50 的 SKU 实施保底流量池</p>
+        <p><strong>2.</strong> 恢复补贴至对照组水平（+$75）</p>
+        <p><strong>3.</strong> 高 GPM 品标记"核心保护品"，分发权重上调</p></div>
+      <div class="card action-card" style="border-top-color:var(--D)"><h3 style="color:var(--D)">D 类治理（751 SKU, -$14,090）</h3>
+        <p><strong style="color:var(--D)">诊断：</strong>pCVR 系统性高估，78% 实验组零成交</p>
+        <p><strong>1. 紧急：</strong>剔除 586 个 GPM=0 SKU，释放 PV 回流 A/B 类</p>
+        <p><strong>2. 根因：</strong>审计 pCVR 模块，校准 Beauty / Home Supplies / Appliances</p>
+        <p><strong>3. 分层：</strong>商城老用户收紧 D 类，优先已验证高 CO 品</p>
+        <p><strong>4. 选品：</strong>&gt;$20 非刚需品设转化门槛</p></div></div>
+      <div class="priority-box"><h3>优先行动清单</h3>
+        <p><span class="dn-c" style="font-weight:700">P0：</span>剔除 586 个零成交 SKU + Top30 黑名单，释放 400K+ PV，预估挽回 $5K-8K GMV</p>
+        <p><span style="color:var(--C);font-weight:700">P1：</span>审计 pCVR 预估模块，重点 Beauty & Home Supplies calibration</p>
+        <p><span style="color:var(--B);font-weight:700">P2：</span>基于 A 类特征扩品（Tissues、Fragrance、Curlers 等高 GPM 三级类目）</p>
+        <p><span style="color:var(--muted);font-weight:700">P3：</span>重建商城老用户分发策略 + GPM 实时监控看板</p></div>`;
+  }
+  el.innerHTML=html;
+}
+renderAction('summary');
+
+// ===== TAB SWITCHING =====
+document.getElementById('mainNav').addEventListener('click',e=>{
+  if(e.target.tagName!=='BUTTON') return;
+  document.querySelectorAll('#mainNav button').forEach(b=>b.classList.remove('active'));
+  e.target.classList.add('active');
+  document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+  document.getElementById('sec-'+e.target.dataset.tab).classList.add('active');
+});
+document.getElementById('drillTabs').addEventListener('click',e=>{
+  if(e.target.tagName!=='BUTTON') return;
+  document.querySelectorAll('#drillTabs button').forEach(b=>b.classList.remove('active'));
+  e.target.classList.add('active');
+  renderDrill(e.target.dataset.sub);
+});
+document.getElementById('actionTabs').addEventListener('click',e=>{
+  if(e.target.tagName!=='BUTTON') return;
+  document.querySelectorAll('#actionTabs button').forEach(b=>b.classList.remove('active'));
+  e.target.classList.add('active');
+  renderAction(e.target.dataset.sub);
+});
+</script>
+</body>
+</html>
