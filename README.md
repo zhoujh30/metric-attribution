@@ -1,41 +1,49 @@
-# AB Attribution Skill
+# Metric Attribution Skill
 
-A Claude Code skill for diagnosing AB experiment anomalies in e-commerce — specifically built for the classic "traffic went up but GMV went down" problem.
+A Claude Code skill for diagnosing **why a metric changed** — built for e-commerce, extensible to other domains.
+
+Handles two scenarios:
+- **AB Attribution**: experiment group vs. control group (e.g., "traffic went up but GMV went down")
+- **AA Attribution**: no explicit control group, construct a reference via period comparison, peer group, DiD, or synthetic control (e.g., "why did GMV drop this week?")
 
 **Trigger phrases:**
 - "Help me analyze this AB test data"
-- "The experiment result is bad, help me figure out why"
+- "Why did GMV drop?"
 - "Traffic increased but GMV didn't grow"
+- "I want to do an attribution analysis"
+- "Help me figure out why this metric changed"
 
 ---
 
 ## What It Does
 
-Guides Claude through a structured 5-phase analysis:
+### Phase 0: Requirements First
+Before any code, Claude asks 4 structured questions (background / observations / action intent / data availability), determines whether this is AB or AA, and for AA recommends the best comparison method. Analysis only starts after a confirmed plan.
+
+### Phase 1–5: Adaptive Analysis Pipeline
 
 | Phase | Name | Description |
 |-------|------|-------------|
-| 0 | Requirements Alignment | Clarify the research question, analysis dimensions, and action direction **before writing any code** |
-| 1 | Data Processing | Compute PV / GMV / GPM / CTR / CO / AOV across experiment vs. control |
-| 2 | Four-Quadrant Classification | Classify all SKUs into A (double-up) / B (efficiency gain) / C (double-down) / D (high traffic, low conversion) |
-| 3 | Multi-Dimensional Drill-Down | Identify top contributors to negative GMV across category / price tier / user type / seller tier / dimension combos |
-| 4 | GPM Mix-Rate Decomposition | Separate structural effects (traffic mix shift) from efficiency effects (same-category conversion drop) |
-| 5 | Action Plan | Generate prioritized recommendations: A-class expansion pool + D-class blacklist + P0-P3 priority ranking |
+| 1 | Data Processing | Compute PV / GMV / GPM / CTR / CO / AOV for both groups |
+| 2 | Adaptive Classification | **2 metrics → 4 quadrants** (A/B/C/D); **1 metric → 2 segments** (positive / negative contribution) |
+| 3 | Multi-Dimensional Drill-Down | Rank contributors by dimension: category (L1→L2→L3) / price tier / user type / seller tier / combos |
+| 4 | Effect Decomposition | **4-quadrant**: GPM Mix-Rate decomposition; **2-segment**: contribution ranking + structure/efficiency split on top negatives |
+| 5 | Action Plan | Modular output: expansion pool / blacklist / algorithm tuning / traffic reallocation — P0–P3 priority ranking |
 
 ## Output Format
 
-- **Interactive HTML dashboard** — dark theme, sticky tabs, Chart.js charts, insight boxes
-- **Excel blacklist** — full D-class SKU list with disposal priority (immediate remove / strongly recommend remove / rate-limit & observe)
+- **Interactive HTML dashboard** — shareable via GitHub Secret Gist link (not searchable, accessible by link only)
+- **Excel blacklist** — full negative SKU list with disposal tiers (immediate remove / strongly recommend remove / rate-limit & observe) + common trait summary for future sourcing rules
 
 ## Example Output
 
-See [examples/analysis.html](examples/analysis.html) for a complete dashboard generated from a real anonymized dataset (1,139 SKUs, Exp PV +29.5%, GMV -1.4%, GPM -24%).
+See [examples/analysis.html](examples/analysis.html) — complete dashboard from a real anonymized dataset (1,139 SKUs, Exp PV +29.5%, GMV -1.4%, GPM -24%).
 
 ## Project Structure
 
 ```
-ab-attribution/
-├── SKILL.md           # Core skill definition (triggers, phases, output specs, checklist)
+metric-attribution/
+├── SKILL.md           # Core skill: phases, methods, output specs, checklist
 ├── examples/
 │   └── analysis.html  # Example interactive dashboard
 └── README.md
@@ -44,23 +52,29 @@ ab-attribution/
 ## How to Use
 
 1. Place `SKILL.md` in your Claude Code skills directory (typically `~/.claude/skills/`)
-2. Upload your AB experiment data (Excel or CSV with PV / Click / Order / GMV / Subsidy per product per version)
-3. Say any of the trigger phrases above
-4. Claude will run Phase 0 to align on your research question before generating the analysis
+2. Say any trigger phrase — Claude will ask 4 questions before requesting data
+3. Upload your data when prompted (Excel / CSV with per-product metrics per group/period)
+4. Confirm the analysis plan, then Claude executes Phase 1–5
+
+**Optional — enable shareable Gist links:**
+Set a GitHub personal access token (`gist` scope) in your environment:
+```bash
+export GITHUB_TOKEN=ghp_your_token_here
+```
 
 ## Roadmap
 
-- [ ] Python analysis template (`templates/analysis.py`) for direct data processing
-- [ ] Support for non-e-commerce AB tests (SaaS metrics: activation, retention, revenue)
+- [ ] Python analysis template (`templates/analysis.py`)
+- [ ] AA method: synthetic control implementation
+- [ ] Support for non-e-commerce metrics (activation, retention, revenue per user)
 - [ ] English version of SKILL.md
 
 ## Contributing
 
-Issues and PRs are welcome. This skill is designed to be extended — common extensions include:
-
+Issues and PRs are welcome. Common extensions:
 - Additional drill-down dimensions (city tier, device type, traffic source)
 - New action modules (cohort analysis, holdout validation)
-- Custom chart themes
+- Industry-specific metric presets
 
 ## License
 
@@ -70,24 +84,24 @@ MIT — see [LICENSE](LICENSE)
 
 ## 中文文档
 
-**AB 实验归因分析 Skill** — 专为电商场景下"流量涨但 GMV 没涨"问题设计的 Claude Code 技能。
+**指标归因分析 Skill** — 定位"某指标为什么变了"，电商场景为主，方法论可扩展至其他行业。
 
 ### 触发方式
 
-直接上传实验数据后说：
+说出意图即可开始，Claude 会先问 4 个问题再要数据：
 - "帮我分析下这个 AB 数据"
-- "实验效果不好帮我看看为什么"
+- "为什么 GMV 跌了"
 - "流量涨了但 GMV 没涨"
+- "我想做个归因分析"
 
-### 分析流程
+### 两种分析模式
 
-先经过 **Phase 0 需求对齐**（锁定研究问题 + 分析维度 + 行动方向），再进入 **Phase 1-5 分析执行**（指标计算 → 四象限分类 → 多维下钻 → GPM Mix-Rate 拆解 → 行动方案）。
-
-分析执行阶段完全根据 Phase 0 的对齐结果动态调整，不是固定模板。
+- **AB 归因**：有显性实验组/对照组，2 指标→4 象限（ABCD），GPM Mix-Rate 拆解
+- **AA 归因**：无显性对照组，构造参照（周期对比/横向对照/DiD/合成控制），1 指标→正向/负向贡献分段
 
 ### 输出
 
-- 纯 HTML 交互看板（无需 React，Chart.js CDN）
-- Excel 黑名单清单（含处置优先级分档）
+- HTML 交互看板，通过 GitHub Secret Gist 生成可分享链接（不可被搜索）
+- Excel 黑名单清单（含处置优先级分档 + 共性特征总结）
 
 详见 [SKILL.md](SKILL.md)。
