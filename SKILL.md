@@ -1,421 +1,424 @@
 ---
 name: metric-attribution
-description: "指标归因分析技能（电商为主，可扩展至其他行业）。当用户需要定位某指标变动根因时触发。适用场景：① AB 实验归因——实验组 vs 对照组，定位 GMV/GPM 变动根因；② 指标异常排查（AA）——无显性对照组，通过构造参照（历史周期、横向对照、DiD 等）找根因。触发词：'帮我分析下这个 AB 数据'、'实验效果不好帮我看看为什么'、'流量涨了但 GMV 没涨'、'为什么 GMV 跌了'、'我想做个归因分析'、'帮我看看这个指标为什么变了'、'某某品类这周为什么表现差'。核心输出：① 自适应分类（2指标→4象限 ABCD；1指标→正向/负向贡献分段）② 多维下钻 ③ 效应拆解（GPM Mix-Rate 或贡献排序+结构/效率拆解）④ 优先级行动方案。输出格式：自包含 HTML（GitHub Secret Gist 链接分享）+ Excel 清单。"
+description: "Metric attribution analysis skill (primary domain: e-commerce; extensible to other industries). Triggered when a user needs to diagnose why a metric changed. Two scenarios: ① AB attribution — experiment group vs. control group, locating root causes of GMV/GPM shifts; ② AA attribution — no explicit control group, constructing a reference via period comparison, peer group, DiD, or synthetic control. Trigger phrases: 'help me analyze this AB data', 'experiment result is bad, why', 'traffic went up but GMV didn't', 'why did GMV drop', 'I want to do an attribution analysis', 'help me figure out why this metric changed', 'why is this category underperforming'. Core output: ① adaptive classification (2 metrics → 4-quadrant ABCD; 1 metric → positive/negative contribution segments) ② multi-dimensional drill-down ③ effect decomposition (GPM Mix-Rate or contribution ranking + structure/efficiency split) ④ prioritized action plan. Output format: self-contained HTML (shareable via GitHub Secret Gist link) + Excel list. Output language defaults to English; switch to Chinese if user writes in Chinese or requests it."
 ---
 
-# 指标归因分析技能（Metric Attribution）
+# Metric Attribution Skill
 
-> **适用范围**：电商场景（GMV / GPM / CTR / CO / AOV）为主，方法论可扩展至其他行业。
-
----
-
-## 概述
-
-本技能分为两个大阶段：
-
-- **Phase 0：需求理解**（分 0a 数据前 + 0b 数据后两步）
-- **Phase 1-5：分析执行**（根据 Phase 0 结论动态调整，不是固定模板）
-
-**核心原则：先搞清楚问什么、怎么比、分析完干什么，再开始写代码。**
+> **Primary domain**: E-commerce (GMV / GPM / CTR / CO / AOV). Methodology is extensible to other industries.
 
 ---
 
-## Phase 0a：意图采集（数据到来前）
+## Overview
 
-**触发时机**：用户表达了分析意图但尚未提供数据（如"我想做个归因分析"、"帮我看看为什么 GMV 跌了"）。
+Two stages:
 
-如果用户**同时提供了数据和完整需求**，跳过 0a，直接进入 0b。
+- **Phase 0: Requirements** (0a pre-data + 0b post-data)
+- **Phase 1–5: Analysis** (dynamically shaped by Phase 0 — not a fixed template)
 
-### 问卷设计
+**Core principle: clarify what to answer, how to compare, and what action follows — before writing any code.**
 
-用 `ask_user_input` 结构化呈现，降低用户回答成本。每次问卷最多 4 个问题，给结构化选项但必须保留开放文本兜底。
-
-**Q1 — 分析背景（选一）：**
-- AB 实验：有明确的实验组和对照组
-- 指标异常排查：某个指标出现了非预期变化，没有显性对照组
-- 策略效果评估：想评估某个策略的影响，无随机分组
-- 其他（自填）
-
-**Q2 — 你已经观察到什么？（开放式）**
-
-> 越具体越好，例如："实验组 GMV -10%，流量涨了 30%""这周 GMV 跌了 15%，大概从周三开始""怀疑是高价品转化出了问题"。没有初步判断也可以填"还不知道"。
-
-**Q3 — 分析结果要支撑什么决策（可多选）：**
-- 选品调整（上架/下架/扩品池）
-- 算法/策略调优（修复模型或分发逻辑）
-- 流量分配优化（调整各品/类目权重）
-- 向上汇报（需要清晰结论和可视化）
-- 其他（自填）
-
-**Q4 — 数据情况（开放式）**
-
-> 你有什么数据？格式是什么（Excel / CSV / 查询结果）？时间范围？有什么已知的数据质量问题需要注意？
-
-### 自适应逻辑
-
-收到回答后：
-- Q1 = AB 实验 → 引导用户上传数据，进入 0b
-- Q1 = 指标异常排查/策略评估 → 额外追问：**有没有可用的历史数据或横向对照组？**（决定 AA 用哪种方法，见 0b.3）
-- Q3 已明确行动方向 → 0b 中不再重复问
+**Output language**: Default English. Switch to Chinese if the user writes in Chinese or explicitly requests it (`请用中文` / `switch to Chinese`).
 
 ---
 
-## Phase 0b：需求对齐（数据到来后）
+## Phase 0a: Intent Capture (Before Data Arrives)
 
-### 0b.1 静默探查
+**When to trigger**: User expresses intent but has not provided data yet (e.g., "I want to do an attribution analysis", "help me figure out why GMV dropped").
 
-拿到数据后，先静默做一次快速探查（不展示给用户），用数据事实支撑后续对话：
-- 读取表结构：列名、数据类型、行数
-- 是否存在 version_id / group_id 等实验分组列 → **判断分析类型（AB / AA）**
-- 识别核心指标列（PV / Click / Order / GMV / Subsidy 等）
-- 识别可下钻维度列（类目层级、价格段、用户类型、商家属性等）
-- 统计大盘总量（两组各自的 PV / GMV / GPM）
-- 判断涉及的核心指标数量 → **决定用 4 象限还是 2 分段**
+**Skip 0a** if the user provides data and full requirements in the same message — go directly to 0b.
 
-### 0b.2 分析类型判断
+### Question Design
 
-| 数据特征 | 分析类型 | Phase 2 分类方式 |
-|---------|---------|----------------|
-| 有显性实验/对照组列 + PV 和 GMV 两个指标 | AB 归因 | 4 象限（ABCD） |
-| 有显性实验/对照组列，但用户只关心 1 个指标 | AB 归因（单指标） | 2 分段（正向/负向贡献） |
-| 无显性对照组，需构造参照 | AA 归因 | 2 分段（正向/负向贡献） |
+Use `ask_user_input` to present structured options, minimizing user effort. Max 4 questions per session. Always include a free-text fallback ("Other").
 
-**单指标判断**：如果用户在 0a Q3 中只关注一个结果指标，或数据中缺少流量指标，按单指标处理。
+**Q1 — Analysis background (single select):**
+- AB experiment: explicit experiment and control groups exist
+- Metric anomaly: a metric moved unexpectedly, no explicit control group
+- Strategy evaluation: assessing the impact of a change, no randomized groups
+- Other (free text)
 
-### 0b.3 AA 方法选择（仅 AA 归因时触发）
+**Q2 — What have you already observed? (open-ended)**
 
-基于 0a Q4 和数据探查结果，推荐主方法并说明核心假设：
+> Be as specific as possible: e.g., "experiment group GMV -10%, traffic up 30%", "GMV dropped 15% starting Wednesday", "suspect high-price items have a conversion issue". "Don't know yet" is fine too.
 
-| 条件 | 推荐方法 | 核心假设 |
-|------|---------|---------|
-| 有稳定历史数据（≥3 个同期），无明显外部冲击 | **周期对比**（WoW / YoY） | 历史趋势可作为反事实基线 |
-| 有外部冲击（大促、政策、平台改版）导致历史不可比 | **DiD（差异中差异）** | 冲击对处理组和对照组的影响趋势平行 |
-| 无可靠历史，但有同质的横向未受影响组 | **横向对照组对比** | 对照组与处理组在关键属性上同质 |
-| 数据点充足但以上均不适用 | **合成控制法** | 可通过加权组合构造反事实 |
-| 数据不足以支撑任何方法 | 明确告知，建议补充哪类数据 | — |
+**Q3 — What decision does this analysis need to support? (multi-select)**
+- Assortment adjustment (add / remove / expand product pool)
+- Algorithm / strategy tuning (fix model or distribution logic)
+- Traffic allocation optimization (adjust weights across products / categories)
+- Upward reporting (clear conclusion + visualization)
+- Other (free text)
 
-**稳健检验触发条件**（自动判断，不额外问用户）：
-- 周期对比后发现明显季节性 → 追加 YoY 验证
-- DiD 后平行趋势假设可疑 → 追加安慰剂检验
-- 横向对照后对照组本身也有变动 → 追加时序一致性验证
+**Q4 — Data situation (open-ended)**
 
-向用户呈现方法推荐和假设，确认后执行。
+> What data do you have? Format (Excel / CSV / query output)? Time range? Any known data quality issues?
 
-### 0b.4 确认分析计划
+### Adaptive Logic
 
-将已知信息汇总为简洁的分析计划，**只问还没有的关键信息**。例如：
-
-> **分析计划确认：**
-> - **分析类型**：AB 归因，2 指标（PV + GMV），用 4 象限分类
-> - **核心问题**：实验组 PV +29.5% 但 GMV -1.4%，定位 GPM 衰减根因
-> - **分析维度**：类目三级穿透 + 价格段 + 用户类型 + 商家层级
-> - **行动方向**：选品调整 + 算法调优
-> - **输出形式**：HTML 看板（Gist 链接）+ D 类黑名单 Excel
-
-用户确认后进入 Phase 1。
+After receiving answers:
+- Q1 = AB experiment → ask user to upload data, proceed to 0b
+- Q1 = Metric anomaly / Strategy evaluation → one follow-up: **Do you have historical data or a comparable peer group?** (determines AA method, see 0b.3)
+- Q3 already specifies action direction → don't repeat in 0b
 
 ---
 
-## Phase 1：数据处理与指标计算
+## Phase 0b: Requirements Alignment (After Data Arrives)
 
-### 1.1 数据粒度确认
+### 0b.1 Silent Exploration
 
-同一 product_id 可能按 user_type、price_range 等维度拆分多行。根据分析需要决定聚合方式：
+Silently explore the data first (don't show this to the user). Use findings to anchor the requirements conversation:
+- Read table structure: column names, data types, row count
+- Check for experiment / version / group columns → **determine analysis type (AB / AA)**
+- Identify core metric columns (PV / Click / Order / GMV / Subsidy, etc.)
+- Identify drillable dimension columns (category hierarchy, price tier, user type, seller attributes, etc.)
+- Compute top-level totals (PV / GMV / GPM for both groups)
+- Count core metrics involved → **determine 4-quadrant vs. 2-segment**
+
+### 0b.2 Analysis Type Detection
+
+| Data characteristics | Analysis type | Phase 2 classification |
+|---------------------|--------------|----------------------|
+| Explicit experiment / control column + PV and GMV both present | AB attribution | 4-quadrant (A/B/C/D) |
+| Explicit experiment / control column, but user only cares about 1 metric | AB attribution (single metric) | 2-segment (positive / negative contribution) |
+| No explicit control group; reference must be constructed | AA attribution | 2-segment (positive / negative contribution) |
+
+**Single-metric detection**: if the user's Q3 focuses on one outcome metric only, or PV/traffic data is absent, treat as single-metric.
+
+### 0b.3 AA Method Selection (AA attribution only)
+
+Based on Q4 and data exploration, recommend a primary method and state its core assumption:
+
+| Condition | Recommended method | Core assumption |
+|-----------|-------------------|----------------|
+| Stable history (≥3 comparable periods), no obvious external shock | **Period comparison** (WoW / YoY) | Historical trend is a valid counterfactual baseline |
+| External shock present (major promo, policy change, platform overhaul) making history non-comparable | **DiD (Difference-in-Differences)** | Shock has parallel trend effects on treatment and control |
+| No reliable history, but comparable lateral groups exist (other categories, regions, user cohorts unaffected by the change) | **Peer group comparison** | Control group is homogeneous with treatment on key attributes |
+| Sufficient data points but none of the above apply | **Synthetic control** | Counterfactual can be constructed via weighted combination |
+| Insufficient data for any method | Clearly state this; suggest what data to collect | — |
+
+**Robustness check triggers** (assessed automatically, no extra questions):
+- Period comparison: strong seasonality detected → add YoY validation
+- DiD: parallel trend assumption appears violated → add placebo test
+- Peer group comparison: control group also shows movement → add time-series consistency check
+
+Present the method recommendation and its assumption to the user. Proceed after confirmation.
+
+### 0b.4 Confirm Analysis Plan
+
+Summarize into a concise plan. **Only ask for information that is still missing.** Example:
+
+> **Analysis plan — please confirm:**
+> - **Type**: AB attribution, 2 metrics (PV + GMV), 4-quadrant classification
+> - **Question**: Exp PV +29.5% but GMV -1.4% — locate root cause of GPM decline
+> - **Dimensions**: Category L1→L2→L3, price tier, user type, seller tier
+> - **Action direction**: Assortment adjustment + algorithm tuning
+> - **Output**: HTML dashboard (Gist link) + D-class blacklist Excel
+
+Proceed to Phase 1 after confirmation.
+
+---
+
+## Phase 1: Data Processing & Metric Computation
+
+### 1.1 Granularity Check
+
+One `product_id` may split across multiple rows by `user_type`, `price_range`, etc. Choose aggregation based on analysis needs:
 
 ```python
-# 商品级聚合（用于四象限/两分段分类）
-agg_exp = df[df['version_id']==exp_id].groupby('product_id')[metric_cols].sum()
-agg_ctrl = df[df['version_id']==ctrl_id].groupby('product_id')[metric_cols].sum()
-merged = agg_exp.join(agg_ctrl, lsuffix='_exp', rsuffix='_ctrl', how='inner')
+# Product-level aggregation (for quadrant / segment classification)
+agg_exp  = df[df['version_id'] == exp_id].groupby('product_id')[metric_cols].sum()
+agg_ctrl = df[df['version_id'] == ctrl_id].groupby('product_id')[metric_cols].sum()
+merged   = agg_exp.join(agg_ctrl, lsuffix='_exp', rsuffix='_ctrl', how='inner')
 
-# 拼接商品属性（类目、价格段等，取去重后的第一行）
-attrs = df[df['version_id']==exp_id].drop_duplicates('product_id').set_index('product_id')[attr_cols]
+# Attach product attributes (category, price tier, etc. — first row after dedup)
+attrs  = df[df['version_id'] == exp_id].drop_duplicates('product_id').set_index('product_id')[attr_cols]
 merged = merged.join(attrs)
 ```
 
-AA 归因时，`_exp` 对应当前期，`_ctrl` 对应构造的参照期/参照组。
+For AA attribution, `_exp` = current period; `_ctrl` = constructed reference period / group.
 
-### 1.2 指标体系
+### 1.2 Metric Framework
 
-| 层级 | 指标 | 公式 |
-|------|------|------|
-| 规模 | PV, GMV, Orders, Subsidy | 直接求和 |
-| 转化漏斗 | CTR, CO | Click/Show, Order/Click |
-| 变现效率 | GPM, OPM, AOV | GMV/PV×1000, Order/PV×1000, GMV/Order |
+| Layer | Metrics | Formula |
+|-------|---------|---------|
+| Scale | PV, GMV, Orders, Subsidy | Direct sum |
+| Conversion funnel | CTR, CO | Click/Show, Order/Click |
+| Monetization efficiency | GPM, OPM, AOV | GMV/PV×1000, Order/PV×1000, GMV/Order |
 
-**展示原则：相对变化率（%）大字优先，绝对值小字辅助。**
+**Display rule: relative change (%) is primary — large text. Absolute value is secondary — small text.**
 
 ---
 
-## Phase 2：自适应分类
+## Phase 2: Adaptive Classification
 
-### 模式 A：4 象限（2 个核心指标，如 PV + GMV）
+### Mode A: 4-Quadrant (2 core metrics, e.g., PV + GMV)
 
-| 象限 | PV | GMV | 含义 | 分析重点 |
-|------|-----|------|------|---------|
-| A 类 | ↑ | ↑ | 双增（标杆） | 提取正向特征 → 扩品池 |
-| B 类 | ↓ | ↑ | 提效（存量优化） | 看转化提升点 |
-| C 类 | ↓ | ↓ | 双跌（存量萎缩） | 是否被流量"劫持"？补贴是否退坡？ |
-| D 类 | ↑ | ↓ | 高曝低转（流量浪费） | **核心审计点** — 为什么流量涨但不转化？ |
+| Quadrant | PV | GMV | Meaning | Focus |
+|----------|-----|------|---------|-------|
+| A | ↑ | ↑ | Double-up (benchmark) | Extract positive traits → expand pool |
+| B | ↓ | ↑ | Efficiency gain (existing inventory) | Find conversion improvement levers |
+| C | ↓ | ↓ | Double-down (shrinkage) | Traffic hijacked by D? Subsidy cut? |
+| D | ↑ | ↓ | High exposure, low conversion (waste) | **Core audit** — why does traffic not convert? |
 
 ```python
 def classify_4q(row):
-    pv_up = row['pv_diff'] > 0
+    pv_up  = row['pv_diff']  > 0
     gmv_up = row['gmv_diff'] > 0
-    if pv_up and gmv_up: return 'A'
-    elif not pv_up and gmv_up: return 'B'
-    elif not pv_up and not gmv_up: return 'C'
-    else: return 'D'
+    if pv_up  and gmv_up:  return 'A'
+    if not pv_up and gmv_up:  return 'B'
+    if not pv_up and not gmv_up: return 'C'
+    return 'D'
 ```
 
-每个象限必须输出：PV（涨幅%）、GMV（涨幅%）、CTR、CO、GPM、AOV、补贴。
+Every quadrant must output: PV (Δ%), GMV (Δ%), CTR, CO, GPM, AOV, Subsidy.
 
-重点对比 C/D 类的 GPM 和 AOV 变化：
-- CO 大跌 + AOV 温和 → 转化出了问题（根本没人买）
-- CO 温和 + AOV 大跌 → 客单价断层（买的便宜了）
+Diagnose C/D by comparing GPM and AOV shifts:
+- CO large drop + AOV stable → conversion failure (no one buying)
+- CO stable + AOV large drop → price-point collapse (buying cheaper)
 
-### 模式 B：2 分段（1 个核心指标，如只看 GMV）
+### Mode B: 2-Segment (1 core metric, e.g., GMV only)
 
-| 分段 | 定义 | 分析重点 |
-|------|------|---------|
-| 正向贡献 | 该维度值的指标相比参照上涨，对整体有正向拉动 | 复制和扩大 |
-| 负向贡献 | 该维度值的指标相比参照下跌，是整体下滑的来源 | 定位根因，优先治理 |
+| Segment | Definition | Focus |
+|---------|------------|-------|
+| Positive contributors | Metric went up vs. reference in this segment | Replicate and expand |
+| Negative contributors | Metric went down vs. reference in this segment | Diagnose root cause, prioritize treatment |
 
-**各分段内按贡献绝对值排序**。重点关注**能显著区分正/负方向的维度**——某价格段或某类目能清晰分开正负贡献时，该维度即为关键分析入口和行动抓手。
+**Within each segment, rank by absolute contribution value.**
+
+Key signal: **a dimension that cleanly separates positive from negative contributors is a high-priority analysis entry point and action lever.**
 
 ---
 
-## Phase 3：多维下钻
+## Phase 3: Multi-Dimensional Drill-Down
 
-对 D 类（4象限模式）或负向贡献分段（2分段模式），以 Phase 0 确认的维度为准，**每个维度按负向贡献绝对值排序**。
+For D-class items (4-quadrant) or negative contributors (2-segment), drill by the dimensions confirmed in Phase 0. **Rank each dimension by negative contribution (absolute value).**
 
-### 标准维度菜单
+### Standard Dimension Menu
 
-| 维度 | 分析目的 | 关键问题 |
-|------|---------|---------|
-| 类目（一级→二级→三级） | 定位出血品类 | 哪些三级类目在流血？ |
-| 价格段 | 价格匹配度 | 是否高价断层或低价引流？ |
-| 用户类型 | 流量匹配度 | 新用户被导到了不感兴趣的品？ |
-| 商家层级 | 供给质量 | 流量是否涌向低层级商家？ |
-| 维度组合（类目×价格段） | 特征交叉定位 | 负向 GMV 的 Top10 组合是什么？ |
+| Dimension | Purpose | Key question |
+|-----------|---------|-------------|
+| Category (L1 → L2 → L3) | Locate bleeding categories | Which L3 categories are hurting most? |
+| Price tier | Price-fit quality | High-price collapse or low-price traffic inflation? |
+| User type | Traffic-fit quality | New users routed to irrelevant products? |
+| Seller tier | Supply quality | Traffic flowing to low-tier sellers? |
+| Dimension combo (category × price tier) | Cross-feature localization | What are the Top 10 negative combos? |
 
-**下钻表格标准列**：维度值、SKU 数、ΔGMV、PV 涨幅%、GPM 当前/参照、GPM 跌幅%、CO 当前/参照
+**Standard drill-down table columns**: Dimension value, SKU count, ΔGMV, PV Δ%, GPM current/reference, GPM Δ%, CO current/reference
 
-可根据 Phase 0 用户追加的维度灵活扩展（如补贴效率、seller 维度等）。
+Extend flexibly based on dimensions added by the user in Phase 0 (e.g., subsidy efficiency, seller-level dimensions).
 
 ---
 
-## Phase 4：效应拆解
+## Phase 4: Effect Decomposition
 
-### 模式 A：GPM Mix-Rate 拆解（4 象限模式）
+### Mode A: GPM Mix-Rate Decomposition (4-quadrant)
 
-**定性结论关键——区分"结构性问题"和"效率性问题"。**
+**Key to a qualitative conclusion — separates structural problems from efficiency problems.**
 
 ```
-GPM 变化 = Mix Effect（流量结构变化） + Rate Effect（同类目转化率变化）
+GPM change = Mix Effect (traffic structure shift) + Rate Effect (within-category conversion change)
 
-Mix Effect  = Σ (share_exp_i - share_ctrl_i) × gpm_ctrl_i
-Rate Effect = Σ share_exp_i × (gpm_exp_i - gpm_ctrl_i)
+Mix Effect  = Σ (share_exp_i  - share_ctrl_i) × gpm_ctrl_i
+Rate Effect = Σ  share_exp_i  × (gpm_exp_i   - gpm_ctrl_i)
 ```
 
-| 结果 | 含义 | 典型行动 |
-|------|------|---------|
-| Rate Effect 为主 | 同类目下转化率全跌，算法效率问题 | 审计 pCVR 模块、调整分发逻辑 |
-| Mix Effect 为主 | 流量结构偏移到低 GPM 类目 | 调整类目间流量分配权重 |
-| 两者兼有 | 复合问题 | 分层治理 |
+| Result | Meaning | Typical action |
+|--------|---------|---------------|
+| Rate Effect dominates | Conversion rates dropped across categories — algorithm efficiency issue | Audit pCVR model, adjust distribution logic |
+| Mix Effect dominates | Traffic shifted toward low-GPM categories | Rebalance traffic weights across categories |
+| Both significant | Compound problem | Treat in layers |
 
-按一级类目拆解，输出每个类目的 Mix 和 Rate 贡献值。
+Break down by L1 category; output each category's Mix and Rate contribution values.
 
-### 模式 B：贡献排序 + 结构/效率拆解（2 分段模式）
+### Mode B: Contribution Ranking + Structure / Efficiency Split (2-segment)
 
-**第一步：维度贡献排序（核心输出）**
-
-对每个维度，计算各维度值对整体指标变化的贡献：
+**Step 1: Contribution ranking by dimension (primary output)**
 
 ```python
 contributions = {}
 for dim_val in df[dimension].unique():
-    mask = df[dimension] == dim_val
+    mask  = df[dimension] == dim_val
     delta = df.loc[mask, 'metric_current'].sum() - df.loc[mask, 'metric_reference'].sum()
     contributions[dim_val] = delta
-# 按绝对值排序，正负分开展示
+# Sort by absolute value; display positive (green) and negative (red) separately
 ```
 
-输出：瀑布图或条形图，颜色区分正向（绿）和负向（红）。**重点标注能显著区分正负方向的维度**——这些维度是行动抓手。
+Output as waterfall or bar chart. **Highlight dimensions that cleanly separate positive from negative** — these are the analysis entry points and action levers.
 
-**第二步：对头部负向维度做结构/效率拆解**
+**Step 2: Structure / efficiency split on top negative dimensions**
 
 ```
-某维度的指标变化 = 结构效应 + 效率效应
+Change in metric for a dimension =
+  Structure effect + Efficiency effect
 
-结构效应 = (share_current - share_reference) × metric_per_unit_reference
-效率效应 = share_current × (metric_per_unit_current - metric_per_unit_reference)
+Structure effect  = (share_current - share_reference) × metric_per_unit_reference
+Efficiency effect =  share_current × (metric_per_unit_current - metric_per_unit_reference)
 ```
 
-| 结果 | 含义 | 行动方向 |
-|------|------|---------|
-| 结构效应为主 | 资源更多分配给了低效维度 | 调整分配权重 |
-| 效率效应为主 | 同维度内本身效率下降 | 定位并修复效率问题 |
-| 两者兼有 | 复合问题 | 分层治理 |
+| Result | Meaning | Action direction |
+|--------|---------|----------------|
+| Structure effect dominates | More resources allocated to low-efficiency segment | Rebalance allocation weights |
+| Efficiency effect dominates | Per-unit efficiency dropped within the segment | Diagnose and fix efficiency issue |
+| Both significant | Compound problem | Treat in layers |
 
 ---
 
-## Phase 5：行动方案输出
+## Phase 5: Action Plan Output
 
-**行动方案内容完全取决于 Phase 0 确认的行动方向，按需组合以下模块：**
+**Content is fully determined by the action direction confirmed in Phase 0. Compose from the modules below as needed.**
 
-### 模块 A：选品调整
+### Module A: Assortment Adjustment
 
-**正向商品特征提取（扩品池）：**
-- 共性画像：核心类目、价格段、商家层级、商家类型
-- 正向贡献排序：一级/三级类目、维度组合
-- 扩品建议：补充哪些三级类目、锚定什么价格段、选什么商家
+**Positive product trait extraction (expansion pool):**
+- Common profile: core categories, price tiers, seller tiers, seller types
+- Positive contribution ranking: by L1 / L3 category, dimension combos
+- Expansion recommendations: which L3 categories to source, which price tiers to anchor, which seller tiers to prioritize
 
-**负向商品黑名单（Excel 清单）：**
-- 全量商品按 ΔGMV 排序
-- 严重程度分三档：
-  - **立即剔除**：对照有成交但当前零成交
-  - **强烈建议剔除**：双组均零成交（纯浪费）
-  - **限流观察**：有成交但 GMV 负增长
-- **共性特征总结 → 转化为未来选品规避规则**（比黑名单本身更重要的输出）
+**Negative product blacklist (Excel export):**
+- Full list sorted by ΔGMV
+- Three disposal tiers:
+  - **Remove immediately**: control group had sales, experiment group has zero
+  - **Strongly recommend removal**: both groups zero sales (pure waste)
+  - **Rate-limit and observe**: has sales but GMV is negative
+- **Common trait summary → convert to future sourcing exclusion rules** (more valuable than the blacklist itself)
 
-### 模块 B：算法/策略调优
+### Module B: Algorithm / Strategy Tuning
 
-- pCVR 校准建议（哪些类目预估失准）
-- 分用户群策略建议（老用户 vs 新用户差异化分发）
-- 转化门槛建议（如高价非刚需品需有偏好信号才分发）
+- pCVR calibration recommendations (which categories have miscalibrated estimates)
+- Per-user-segment strategy recommendations (differentiated distribution for returning vs. new users)
+- Conversion gate recommendations (e.g., high-price non-essential items should require preference signals before being served)
 
-### 模块 C：流量分配优化
+### Module C: Traffic Allocation Optimization
 
-- 各象限 PV 效率量化（每千 PV 产出多少 GMV）
-- 流量回流建议（D 类释放的 PV 应回流给哪些 A/B 类品）
+- PV efficiency by quadrant / segment (GMV generated per 1,000 PV)
+- Traffic reflow recommendations (where should PV freed from D-class flow to — A / B class products)
 
-### 模块 D：补贴效率审计
+### Module D: Subsidy Efficiency Audit
 
-- 单位 PV 补贴成本对比
-- 按象限和商家层级的 ROAS 对比
-- 高风险浪费标记
+- Subsidy cost per unit PV, comparison across groups
+- ROAS comparison by quadrant and seller tier
+- High-risk waste flagging
 
-### 模块 E：C 类治理
+### Module E: C-Class Recovery
 
-- 诊断：补贴退坡 vs 流量被劫持
-- 恢复策略：保底流量池、补贴恢复、保护品标记
+- Diagnosis: subsidy cut vs. traffic hijacked by D-class
+- Recovery strategies: floor traffic protection, subsidy restoration, priority product tagging
 
-### 优先级框架
+### Priority Framework
 
-所有建议按 P0-P3 排序：
-- **P0 紧急止血**：剔除零成交品 + 限流 Top 负向品，释放 PV
-- **P1 根因修复**：审计模型 / 调整分发逻辑
-- **P2 扩品增长**：基于正向特征扩充品池
-- **P3 长期建设**：监控看板 + 分发策略重建
+All recommendations ranked P0–P3:
+- **P0 — Stop the bleeding**: remove zero-conversion products, rate-limit top negatives, free up PV
+- **P1 — Fix root cause**: audit model / adjust distribution logic
+- **P2 — Grow positives**: expand product pool based on positive traits
+- **P3 — Build long-term**: monitoring dashboard + distribution strategy rebuild
 
 ---
 
-## 输出规范
+## Output Specifications
 
-### HTML 交互看板
+### Interactive HTML Dashboard
 
-使用纯 HTML + CSS + Chart.js（CDN），不使用 React。
+Pure HTML + CSS + Chart.js (CDN). No React.
 
-**结构：**
-- Header：分析名称、对比组说明、核心 KPI 一行摘要
-- Tab 导航（sticky）：全局概览 | 分类分析 | 负向深度下钻 | 效应拆解 | 行动方案
-- 下钻 Tab 内使用 sub-tab 切换维度
-- 行动方案 Tab 内使用 sub-tab 切换模块
+**Structure:**
+- Header: analysis name, group comparison description, core KPI one-line summary
+- Sticky tab nav: Overview | Classification | Drill-Down | Effect Decomposition | Action Plan
+- Drill-down tab: sub-tabs to switch between dimensions
+- Action plan tab: sub-tabs to switch between modules
 
-**设计规范：**
-- 深色主题（bg: #0c0e14, card: #161923）
-- 字体：JetBrains Mono（数据） + Noto Sans SC（中文）
-- 颜色语义：A=#10b981, B=#3b82f6, C=#eab308, D=#ef4444；正向贡献=#10b981，负向贡献=#ef4444
-- 涨跌色：up=#34d399, down=#f87171
-- 指标卡片：百分比大字 + 绝对值小字
-- Insight 框：danger/warn/success/info 四种
-- 表格前 3-5 行高亮（最严重的行）
+**Design rules:**
+- Dark theme (bg: `#0c0e14`, card: `#161923`)
+- Fonts: JetBrains Mono (numbers) + system sans-serif (text)
+- Color semantics: A=`#10b981`, B=`#3b82f6`, C=`#eab308`, D=`#ef4444`; positive=`#10b981`, negative=`#ef4444`
+- Up/down colors: up=`#34d399`, down=`#f87171`
+- Metric cards: % change large text, absolute value small text
+- Insight boxes: `danger` / `warn` / `success` / `info`
+- Top 3–5 rows highlighted in tables (most severe first)
 
-### 分享链接（GitHub Secret Gist）
+### Shareable Link (GitHub Secret Gist)
 
-生成 HTML 后，通过 GitHub API 创建 **Secret Gist**（不出现在搜索结果，有链接才能访问）：
+After generating the HTML, create a **Secret Gist** via the GitHub API (`public: false` — not searchable, accessible only via link):
 
 ```python
 import requests, os
 
 def create_secret_gist(html_content: str, title: str) -> str:
-    token = os.environ.get('GITHUB_TOKEN')  # 一次性配置，需 gist 权限
+    token = os.environ.get('GITHUB_TOKEN')  # one-time setup, requires gist scope
     headers = {
         'Authorization': f'token {token}',
-        'Accept': 'application/vnd.github.v3+json'
+        'Accept': 'application/vnd.github.v3+json',
     }
     payload = {
         'description': title,
-        'public': False,          # Secret Gist，不出现在搜索结果
-        'files': {f'{title}.html': {'content': html_content}}
+        'public': False,
+        'files': {f'{title}.html': {'content': html_content}},
     }
-    resp = requests.post('https://api.github.com/gists', json=payload, headers=headers)
-    raw_url = resp.json()['files'][f'{title}.html']['raw_url']
+    resp     = requests.post('https://api.github.com/gists', json=payload, headers=headers)
+    raw_url  = resp.json()['files'][f'{title}.html']['raw_url']
     return f'https://htmlpreview.github.io/?{raw_url}'
 ```
 
-**一次性配置**：在环境变量或 `~/.claude/settings.json` 中设置 `GITHUB_TOKEN`（需 `gist` 权限）。
+**One-time setup**: set `GITHUB_TOKEN` in your environment or `~/.claude/settings.json` (requires `gist` scope).
 
-未配置 token 时，输出本地 HTML 文件并提示配置方法。
+If no token is configured: output a local HTML file and display setup instructions.
 
-### Excel 清单（单独文件）
+### Excel List (Separate File)
 
-负向商品全量清单，包含：product_id、ΔGMV、PV 变化%、GPM 当前/参照、一/二/三级类目、价格段、商家层级/类型、处置建议（分三档）。
+Full negative product list: `product_id`, ΔGMV, PV Δ%, GPM current/reference, L1/L2/L3 category, price tier, seller tier/type, disposal recommendation (three tiers).
 
-根据用户需求，也可输出正向商品白名单 Excel。
+Positive product whitelist Excel available on request.
 
 ---
 
-## 话术模板
+## Response Templates
 
-**AA 方法推荐：**
-> "数据中有 X 周的历史数据，且未发现明显外部冲击，推荐用**周期对比（WoW）**作为基准。核心假设：历史趋势可作为反事实基线。你觉得这个假设成立吗？"
+**AA method recommendation:**
+> "You have X weeks of historical data with no obvious external shocks, so I recommend **WoW period comparison** as the baseline. Core assumption: the historical trend is a valid counterfactual. Does that hold for this period?"
 
-**GPM 归因结论：**
-- Rate 主导：「这是算法转化效率的系统性问题，不是流量分发错位。Rate Effect 贡献了 X% 的 GPM 衰减。」
-- Mix 主导：「流量结构显著偏移，更多流量流向低 GPM 类目。Mix Effect 贡献了 X% 的 GPM 衰减。」
+**GPM attribution conclusion:**
+- Rate dominates: "This is a systemic algorithm efficiency issue, not a traffic mix problem. Rate Effect accounts for X% of the GPM decline."
+- Mix dominates: "Traffic structure has shifted materially toward low-GPM categories. Mix Effect accounts for X% of the GPM decline."
 
-**C/D 类判断：**
-- 转化问题：「核心是"根本没人买"而非"客单价变低"。D 类 CO -X%，AOV 变化温和。」
-- 客单价问题：「问题在于客单价断层。D 类 AOV -X%，低价品占据了大量流量。」
+**C/D diagnosis:**
+- Conversion issue: "The core problem is 'no one is buying', not 'prices are too low'. D-class CO -X%, AOV change is mild."
+- Price collapse: "The issue is price-point collapse. D-class AOV -X%, low-price items absorbed most of the traffic."
 
-**维度关键发现：**
-> 「[维度名] 能显著区分正负贡献——[维度值A] 正向拉动 +$X，[维度值B] 负向拖累 -$X，是最值得深入的分析入口。」
+**Dimension key finding:**
+> "[Dimension] cleanly separates positive from negative contributors — [value A] pulled up +$X, [value B] dragged down -$X. This is the highest-priority analysis entry point."
 
 ---
 
 ## Checklist
 
-**Phase 0a（意图采集）：**
-- [ ] 已收集分析背景（AB / 指标异常排查 / 策略评估）
-- [ ] 已了解用户的初步观察和假设
-- [ ] 已明确行动意图（选品 / 算法 / 流量 / 汇报）
-- [ ] 已了解数据情况和已知质量问题
+**Phase 0a (intent capture):**
+- [ ] Analysis background collected (AB / metric anomaly / strategy evaluation)
+- [ ] User's existing observations and hypotheses captured
+- [ ] Action intent clarified (assortment / algorithm / traffic / reporting)
+- [ ] Data situation and known quality issues understood
 
-**Phase 0b（需求对齐）：**
-- [ ] 已静默探查数据结构和大盘指标
-- [ ] 已判断分析类型（AB / AA）和分类模式（4象限 / 2分段）
-- [ ] AA 模式：已推荐主方法并说明假设，已获用户确认
-- [ ] 已输出分析计划并获用户确认，只问了缺失的关键信息
+**Phase 0b (requirements alignment):**
+- [ ] Data silently explored; top-level metrics computed
+- [ ] Analysis type determined (AB / AA) and classification mode chosen (4-quadrant / 2-segment)
+- [ ] AA mode: primary method recommended with assumption stated; user confirmed
+- [ ] Analysis plan confirmed; only missing critical info was asked
 
-**Phase 1-4（分析执行）：**
-- [ ] 全局指标看板（相对变化率优先）
-- [ ] 分类完成（4象限含完整指标对比 / 2分段含正负贡献绝对值排序）
-- [ ] 用户确认的维度均已下钻（类目逐层穿透）
-- [ ] 效应拆解完成，定性结论明确（Rate/Mix 或 结构/效率）
-- [ ] AA 模式：稳健检验触发条件已检查，必要时已追加验证
+**Phase 1–4 (analysis execution):**
+- [ ] Top-level metric dashboard complete (relative change % primary)
+- [ ] Classification complete (4-quadrant with full metric comparison / 2-segment with contribution ranking)
+- [ ] All user-confirmed dimensions drilled (category traversed L1→L2→L3)
+- [ ] Effect decomposition complete with clear qualitative conclusion (Rate/Mix or Structure/Efficiency)
+- [ ] AA mode: robustness check conditions reviewed; additional validation added if triggered
 
-**Phase 5（行动方案）：**
-- [ ] 行动方案覆盖了 Phase 0 确认的方向
-- [ ] 正向特征已提取（如需选品调整）
-- [ ] 负向商品黑名单 Excel 已导出（如需选品调整）
-- [ ] 黑名单共性特征已总结，转化为未来选品规避规则
-- [ ] 建议按 P0-P3 排优先级
+**Phase 5 (action plan):**
+- [ ] Action plan covers all directions confirmed in Phase 0
+- [ ] Positive traits extracted (if assortment adjustment requested)
+- [ ] Negative product blacklist Excel exported (if assortment adjustment requested)
+- [ ] Blacklist common traits summarized and converted to future sourcing exclusion rules
+- [ ] All recommendations ranked P0–P3
 
-**输出检查：**
-- [ ] HTML 看板所有 Tab/Sub-tab 正常切换
-- [ ] Chart.js 图表正确渲染
-- [ ] 所有表格按贡献度排序
-- [ ] Gist 链接已生成并可访问（或本地文件已导出）
-- [ ] Excel 已单独导出
+**Output check:**
+- [ ] All HTML tabs / sub-tabs switch correctly
+- [ ] Chart.js charts render correctly
+- [ ] All tables sorted by contribution magnitude
+- [ ] Gist link generated and accessible (or local file exported with setup note)
+- [ ] Excel exported as a separate file
